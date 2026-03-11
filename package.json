@@ -1,0 +1,21 @@
+{
+  "name": "t2-call-summary-mvp",
+  "version": "1.0.0",
+  "description": "Local MVP scaffold for call transcript mock pipeline",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "express": "^5.1.0",
+    "openai": "^6.27.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
+  }
+}

@@ -1,14 +1,21 @@
 # TASKS.md
 
-- [ ] Инициализация проекта
-- [ ] Минимальный Node.js scaffold
-- [ ] Mock endpoint /dev/mock-call
-- [ ] Интеграция OpenAI
-- [ ] Structured JSON response
-- [ ] Отправка в Telegram
-- [ ] Ignore-list сотрудников
-- [ ] Хранение уже обработанных звонков
-- [ ] Подключение t2 API
+- [x] Инициализация проекта
+- [x] Минимальный Node.js scaffold
+- [x] Mock endpoint /dev/mock-call
+- [x] Интеграция OpenAI
+- [x] Structured JSON response
+- [x] Отправка в Telegram
+- [x] Ignore-list сотрудников
+- [x] Хранение уже обработанных звонков
+- [x] Каркас интеграции t2 API
+- [x] Валидация env при старте
+- [x] Усиление structured output анализа
+- [x] Локальная история обработки звонков
+- [x] Сериализация записи call-history
+- [x] Улучшение формата Telegram-сообщения
+- [x] Timeout для Telegram API
+- [ ] Реальное подключение t2 API по документации
 - [ ] Получение транскрипта
 - [ ] Polling новых звонков
 - [ ] Финальная ручная проверка MVP

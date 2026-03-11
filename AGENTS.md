@@ -11,6 +11,16 @@ After each completed call:
 3. return structured JSON
 4. send summary to Telegram
 
+## Current project status (fixed baseline)
+- current state is a **local MVP**
+- real t2 API is **not connected yet**
+- `/dev/t2-ingest` is a **scaffold/debug route**, not a production endpoint
+- production-grade storage is **not implemented yet**
+
+## Storage rule
+- `data/processed-calls.json` and `data/call-history.json` are allowed only for local MVP / single-instance mode
+- for production or multi-instance mode, use another storage layer (shared persistent storage)
+
 ## Collaboration rule
 This project is managed in parallel in:
 - ChatGPT
@@ -34,6 +44,12 @@ After making changes:
 5. describe the expected result
 6. mention likely errors or edge cases
 
+Codex practical response must always include:
+1. list of changed files
+2. full code of new/changed files
+3. commands for manual verification
+4. expected verification result
+
 ## Implementation style
 - prefer the simplest possible implementation
 - optimize for a working MVP, not ideal architecture
@@ -53,6 +69,11 @@ After making changes:
 - use environment variables for secrets
 - do not refactor unrelated files
 - make focused, minimal changes
+
+## Do not touch extra scope
+- do not change endpoint contracts unless explicitly requested
+- do not add new dependencies unless truly necessary for the requested task
+- do not do "beauty refactors" when the task is local and focused
 
 ## Delivery format for every practical task
 1. plan
@@ -120,3 +141,6 @@ When proposing implementation work, always include a ready-to-send Codex prompt.
 - do not introduce database, queue, docker, auth frameworks, or cloud deployment unless explicitly requested
 - do not change package choices without explaining why
 - do not remove working code unless necessary
+- do not create a new project unless explicitly requested
+- do not rewrite system-level instructions
+- keep project rules compact; do not turn them into a long "constitutional" document
