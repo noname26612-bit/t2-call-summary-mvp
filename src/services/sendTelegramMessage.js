@@ -1,5 +1,4 @@
 const { formatTelegramCallSummary } = require('./telegramMessageFormatter');
-const DEFAULT_TELEGRAM_API_TIMEOUT_MS = 10000;
 
 class TelegramConfigurationError extends Error {
   constructor(message, code) {
@@ -14,95 +13,115 @@ function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim() !== '';
 }
 
-function parseTelegramApiTimeoutMs(envValue) {
-  if (envValue === undefined) {
-    return DEFAULT_TELEGRAM_API_TIMEOUT_MS;
+function createTelegramSender(config, logger) {
+  if (!config || !isNonEmptyString(config.botToken) || !isNonEmptyString(config.chatId)) {
+    throw new TelegramConfigurationError(
+      'Server configuration error: TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required',
+      'TELEGRAM_MISSING_CONFIG'
+    );
   }
 
-  if (typeof envValue !== 'string') {
+  if (!Number.isSafeInteger(config.apiTimeoutMs) || config.apiTimeoutMs <= 0) {
     throw new TelegramConfigurationError(
       'Server configuration error: TELEGRAM_API_TIMEOUT_MS must be a positive integer',
       'TELEGRAM_INVALID_TIMEOUT'
     );
   }
 
-  const trimmedValue = envValue.trim();
-  if (!/^[0-9]+$/.test(trimmedValue)) {
-    throw new TelegramConfigurationError(
-      'Server configuration error: TELEGRAM_API_TIMEOUT_MS must be a positive integer',
-      'TELEGRAM_INVALID_TIMEOUT'
-    );
-  }
+  const botToken = config.botToken.trim();
+  const chatId = config.chatId.trim();
+  const timeoutMs = config.apiTimeoutMs;
+  const timeZone = isNonEmptyString(config.timeZone) ? config.timeZone.trim() : 'Europe/Moscow';
 
-  const timeoutMs = Number.parseInt(trimmedValue, 10);
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
-    throw new TelegramConfigurationError(
-      'Server configuration error: TELEGRAM_API_TIMEOUT_MS must be a positive integer',
-      'TELEGRAM_INVALID_TIMEOUT'
-    );
-  }
-
-  return timeoutMs;
-}
-
-async function sendTelegramMessage({ phone, callDateTime, analysis }) {
-  const timeoutMs = parseTelegramApiTimeoutMs(process.env.TELEGRAM_API_TIMEOUT_MS);
-  const botToken = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
-
-  if (!isNonEmptyString(botToken) || !isNonEmptyString(chatId)) {
-    console.error('Telegram configuration error: TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required');
-    return { status: 'failed' };
-  }
-
-  const url = `https://api.telegram.org/bot${botToken.trim()}/sendMessage`;
-  const text = formatTelegramCallSummary({ phone, callDateTime, analysis });
-  const abortController = new AbortController();
-  const timeoutId = setTimeout(() => {
-    abortController.abort();
-  }, timeoutMs);
-
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      signal: abortController.signal,
-      body: JSON.stringify({
-        chat_id: chatId.trim(),
-        text
-      })
+  return async function sendTelegramMessage({ phone, callDateTime, analysis }) {
+    const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+    const text = formatTelegramCallSummary({
+      phone,
+      callDateTime,
+      analysis,
+      timeZone
     });
 
-    let responseJson = null;
+    const abortController = new AbortController();
+    const timeoutId = setTimeout(() => {
+      abortController.abort();
+    }, timeoutMs);
+
     try {
-      responseJson = await response.json();
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        signal: abortController.signal,
+        body: JSON.stringify({
+          chat_id: chatId,
+          text
+        })
+      });
+
+      let responseJson = null;
+      try {
+        responseJson = await response.json();
+      } catch (parseError) {
+        responseJson = null;
+      }
+
+      if (!response.ok || responseJson?.ok !== true) {
+        const description = isNonEmptyString(responseJson?.description)
+          ? responseJson.description
+          : 'Telegram returned an unexpected response';
+
+        logger.warn('telegram_send_failed', {
+          httpStatus: response.status,
+          description
+        });
+
+        return {
+          status: 'failed',
+          httpStatus: response.status,
+          errorCode: 'TELEGRAM_API_ERROR',
+          errorMessage: description,
+          responsePayload: responseJson
+        };
+      }
+
+      return {
+        status: 'sent',
+        httpStatus: response.status,
+        responsePayload: responseJson
+      };
     } catch (error) {
-      responseJson = null;
-    }
+      if (error && error.name === 'AbortError') {
+        logger.warn('telegram_send_timeout', {
+          timeoutMs
+        });
 
-    if (!response.ok || responseJson?.ok !== true) {
-      const description = isNonEmptyString(responseJson?.description)
-        ? responseJson.description
-        : 'Telegram returned an unexpected response';
-      throw new Error(`HTTP ${response.status}: ${description}`);
-    }
+        return {
+          status: 'failed',
+          errorCode: 'TELEGRAM_TIMEOUT',
+          errorMessage: `Telegram send timeout after ${timeoutMs} ms`,
+          responsePayload: null
+        };
+      }
 
-    return { status: 'sent' };
-  } catch (error) {
-    if (error && error.name === 'AbortError') {
-      console.error(`Telegram send timeout: request exceeded ${timeoutMs} ms`);
-      return { status: 'failed' };
-    }
+      logger.warn('telegram_send_error', {
+        error
+      });
 
-    console.error(`Telegram send failed: ${error.message}`);
-    return { status: 'failed' };
-  } finally {
-    clearTimeout(timeoutId);
-  }
+      return {
+        status: 'failed',
+        errorCode: 'TELEGRAM_REQUEST_FAILED',
+        errorMessage: error.message,
+        responsePayload: null
+      };
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  };
 }
 
 module.exports = {
-  sendTelegramMessage
+  createTelegramSender,
+  TelegramConfigurationError
 };

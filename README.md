@@ -1,345 +1,174 @@
 # t2-call-summary-mvp
 
-Минимальный локальный scaffold для этапа MVP с OpenAI-анализом звонков, отправкой результата в Telegram и локальным хранением уже обработанных звонков.
+Node.js/Express сервис для обработки звонков:
+`t2 call event -> transcript analysis (AI gateway) -> Telegram summary`.
 
-## Requirements
-- Node.js 18+
-- npm
+## Текущий этап
 
-## Setup
+Проект переведён с локального JSON MVP на production foundation:
+
+- runtime storage работает через PostgreSQL
+- миграции добавлены и обязательны
+- `/healthz` проверяет доступность БД
+- Dockerfile готов для контейнерного деплоя
+- structured logging включён (JSON logs)
+- graceful shutdown добавлен
+
+## Текущая архитектура
+
+- `src/server.js`: HTTP API, health endpoints, bootstrap
+- `src/services/callProcessor.js`: основная бизнес-логика обработки звонка
+- `src/services/gatewayAnalyzeCall.js`: интеграция main app -> external ai-gateway
+- `src/storage/postgresStorage.js`: storage abstraction + PostgreSQL реализация
+- `migrations/001_init.sql`: минимальная production-схема БД
+- `src/scripts/migrate.js`: применение миграций
+- `src/scripts/importJsonBootstrap.js`: одноразовый импорт legacy JSON
+
+## Storage source of truth
+
+`data/*.json` больше **не** source of truth для runtime.
+
+JSON-файлы используются только как legacy-источник для одноразового импорта в PostgreSQL:
+
 ```bash
-npm install
+npm run import:json
 ```
 
-Создай локальный `.env`:
-```bash
-cp .env.example .env
-```
+## Production target
 
-Пример `.env`:
-```env
-PORT=3000
-IGNORED_PHONES=+79990000001,+79990000002
-OPENAI_API_KEY=your_openai_api_key_here
-TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
-TELEGRAM_CHAT_ID=your_telegram_chat_id_here
-TELEGRAM_API_TIMEOUT_MS=10000
-T2_API_BASE_URL=https://example.t2.api
-T2_API_TOKEN=your_t2_api_token_here
-T2_API_TIMEOUT_MS=10000
-```
+Текущий целевой контур:
 
-## Обязательные env
-При старте сервиса обязательно должны быть заданы и не быть пустыми:
-- `OPENAI_API_KEY`
+- 1 VM в Yandex Compute Cloud
+- 1 контейнер с этим сервисом
+- Yandex Managed Service for PostgreSQL
+- Yandex Container Registry для образа
+- env variables сейчас, Lockbox позже
+- регион: `ru-central1`
+- бизнес-таймзона: `Europe/Moscow`
+
+
+## Expected load / Current load baseline
+
+- total calls: `100-200/day`
+- analyzed calls: `100-150/day`
+
+Для текущего этапа этот объём считается покрываемым текущей архитектурой:
+
+- 1 VM (Yandex Compute Cloud)
+- 1 Node.js/Express сервис
+- 1 managed PostgreSQL
+
+Topology changes (worker/queue/extra services) не требуются на этом этапе и должны рассматриваться только после first deploy на основе реальных метрик нагрузки, latency и ошибок.
+
+## t2 ingest статус
+
+`POST /dev/t2-ingest` остаётся scaffold/debug-маршрутом.
+
+На текущем этапе приоритет: production foundation (стабильный runtime + deploy),
+а не углубление реального t2 production ingest.
+
+## Business categories (документированная целевая модель)
+
+Целевые категории:
+
+- продажа
+- сервис
+- запчасти
+- аренда
+- спам
+- прочее
+
+Runtime и документация синхронизированы с этим enum.
+Для legacy-значений (например `ремонт`, `покупка_станка`, `доставка`) в normalizer есть явный mapping в новый enum.
+
+## Минимальные env
+
+Обязательные:
+
+- `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` (или `DATABASE_URL`)
+- `AI_GATEWAY_URL`
+- `AI_GATEWAY_SHARED_SECRET`
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
 
-`PORT`, `IGNORED_PHONES`, `TELEGRAM_API_TIMEOUT_MS`, `T2_API_BASE_URL`, `T2_API_TOKEN` и `T2_API_TIMEOUT_MS` на этом этапе не считаются обязательными для старта.
+Рекомендуемые:
 
-Пример ошибки запуска без обязательных env:
+- `APP_TIMEZONE=Europe/Moscow`
+- `LOG_LEVEL=info`
+- `IGNORE_LIST_BOOTSTRAP_FROM_ENV=true`
+- `AI_GATEWAY_TIMEOUT_MS=20000`
+
+DB SSL modes (no ambiguity):
+
+- basic first deploy path: `DB_SSL=false`
+- advanced path later: `DB_SSL=true` + `DB_SSL_REJECT_UNAUTHORIZED=true` + CA/root cert
+
+Шаблон: `.env.example`
+
+## Local flow: migrate / import / run
+
 ```bash
-Runtime environment validation failed: Missing required environment variables: OPENAI_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
-```
-
-## Telegram setup
-1. Создай бота в Telegram через `@BotFather`:
-   - отправь команду `/newbot`
-   - задай имя и username
-   - сохрани выданный токен в `TELEGRAM_BOT_TOKEN`
-2. Получи `chat_id`:
-   - напиши любое сообщение своему боту
-   - выполни запрос:
-     ```bash
-     curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/getUpdates"
-     ```
-   - возьми `message.chat.id` и сохрани в `TELEGRAM_CHAT_ID`
-
-Параметр таймаута отправки в Telegram:
-- `TELEGRAM_API_TIMEOUT_MS` (опционально) — timeout HTTP-запроса к Telegram в миллисекундах
-- по умолчанию используется `10000`
-- если задан, должен быть положительным целым числом, иначе будет ошибка конфигурации сервера
-
-## Run
-```bash
+npm install
+cp .env.example .env
+npm run migrate
+npm run import:json   # опционально, если нужен перенос старых данных
 npm run dev
 ```
 
-Production-like run:
-```bash
-npm start
-```
+## Current deployment status
 
-Сервер поднимается на порту из `.env` (`PORT`), либо на `3000` по умолчанию.
+Local PostgreSQL-based smoke baseline has already passed.
 
-## Endpoints
+Canonical operational progress log:
+- `DEPLOY_PROGRESS.md`
 
-### GET /health
-Проверка, что сервис работает.
+Current active next step:
+- deploy `ai-gateway` in supported region
+- set `AI_GATEWAY_*` env on main app VM
+- restart main app container
+- run first end-to-end smoke for `main app -> ai-gateway -> OpenAI`
+
+## Execution note
+
+This project is being developed in a beginner-friendly workflow.
+Practical steps should be followed sequentially:
+
+- run command
+- verify output
+- only then move to next step
+
+If you change `.env`, restart the service before re-checking behavior.
+If you change DB schema, run migrations before starting the app.
+If you test duplicate/ignored flows, verify both HTTP response and PostgreSQL records.
+
+## Health и smoke
+
+- `GET /health` — базовая liveness проверка
+- `GET /healthz` — проверка процесса + PostgreSQL
 
 Пример:
+
 ```bash
-curl -X GET http://localhost:3000/health
+curl -s http://localhost:3000/healthz
 ```
 
-### POST /dev/mock-call
-Локальный mock endpoint для приёма звонка.
+## Docker flow
 
-Тело запроса:
-- `phone` (string)
-- `callDateTime` (string)
-- `transcript` (string, обязателен и не пустой)
+Сборка:
 
-Пример:
 ```bash
-curl -X POST http://localhost:3000/dev/mock-call \
-  -H "Content-Type: application/json" \
-  -d '{
-    "phone": "+79991234567",
-    "callDateTime": "2026-03-11T15:00:00+03:00",
-    "transcript": "Клиент уточнил наличие запчасти и сроки доставки"
-  }'
+docker build -t t2-call-summary-mvp:latest .
 ```
 
-Если `transcript` пустой или отсутствует, endpoint возвращает `400`.
+Запуск:
 
-### POST /api/process-call
-Полный локальный сценарий обработки:
-- валидация входных данных
-- проверка ignore-list внутренних номеров
-- проверка дубля по fingerprint (`phone|callDateTime|transcript`) в локальном JSON store
-- OpenAI structured JSON-анализ (только для неигнорируемых и не-дублирующихся звонков)
-- отправка краткого результата анализа в Telegram (только для неигнорируемых и не-дублирующихся звонков)
-- сохранение обработанного звонка в локальный store после попытки отправки в Telegram
-
-Если номер в `IGNORED_PHONES`, ответ:
-- `status: "ignored"`
-- `reason: "internal_phone"`
-- OpenAI не вызывается
-- Telegram не вызывается
-- локальный store не трогается
-
-Если номер не в ignore-list и звонок уже обрабатывался ранее, ответ:
-- `status: "duplicate"`
-- `reason: "already_processed"`
-- OpenAI не вызывается
-- Telegram не вызывается
-
-Если номер не в ignore-list и это новый звонок, ответ:
-- `status: "processed"`
-- `analysis` со structured JSON
-- `telegram.status`:
-  - `"sent"` если сообщение ушло
-  - `"failed"` если Telegram недоступен/некорректно настроен или превышен timeout `TELEGRAM_API_TIMEOUT_MS` (при этом endpoint всё равно возвращает `200` и `analysis`)
-- даже при `telegram.status: "failed"` звонок считается обработанным и сохраняется в store
-
-Пример для игнорируемого номера:
 ```bash
-curl -X POST http://localhost:3000/api/process-call \
-  -H "Content-Type: application/json" \
-  -d '{
-    "phone": "+79990000001",
-    "callDateTime": "2026-03-11T15:00:00+03:00",
-    "transcript": "Клиент хочет купить оборудование"
-  }'
+docker run --rm -p 3000:3000 --env-file .env t2-call-summary-mvp:latest
 ```
 
-Пример для обычного номера:
-```bash
-curl -X POST http://localhost:3000/api/process-call \
-  -H "Content-Type: application/json" \
-  -d '{
-    "phone": "+79991234567",
-    "callDateTime": "2026-03-11T15:00:00+03:00",
-    "transcript": "Хочу узнать стоимость и купить запчасть"
-  }'
-```
+`docker-entrypoint.sh` сначала запускает миграции, затем стартует сервис.
 
-Пример ответа:
-```json
-{
-  "status": "processed",
-  "phone": "+79991234567",
-  "callDateTime": "2026-03-11T15:00:00+03:00",
-  "analysis": {
-    "category": "прочее",
-    "topic": "Короткое название темы",
-    "summary": "Краткая суть разговора",
-    "result": "Чем закончился разговор",
-    "nextStep": "Что делать дальше",
-    "urgency": "низкая",
-    "tags": ["звонок"],
-    "confidence": 0.5
-  },
-  "telegram": {
-    "status": "sent"
-  }
-}
-```
+## Yandex Cloud deploy notes
 
-Если отправка в Telegram не удалась, пример ответа:
-```json
-{
-  "status": "processed",
-  "phone": "+79991234567",
-  "callDateTime": "2026-03-11T15:00:00+03:00",
-  "analysis": {
-    "category": "прочее",
-    "topic": "Короткое название темы",
-    "summary": "Краткая суть разговора",
-    "result": "Чем закончился разговор",
-    "nextStep": "Что делать дальше",
-    "urgency": "низкая",
-    "tags": ["звонок"],
-    "confidence": 0.5
-  },
-  "telegram": {
-    "status": "failed"
-  }
-}
-```
-
-### Формат Telegram-уведомления
-Для каждого звонка со `status: "processed"` отправляется компактное сообщение в едином формате:
-
-```text
-Обработанный звонок
-Категория: ...
-Тема: ...
-Телефон: ...
-Дата и время: ...
-Сводка: ...
-Результат: ...
-Следующий шаг: ...
-Срочность: ...
-Теги: ...
-```
-
-Правила форматирования:
-- единая структура для всех `processed`-звонков
-- если поле отсутствует или пустое, подставляется `—`
-- `Теги` всегда в одной строке через запятую; если тегов нет, выводится `—`
-- сообщение отправляется как plain text без markdown-разметки
-
-### Финальная схема `analysis`
-- `category`: enum из фиксированного списка
-  - `запчасти`
-  - `ремонт`
-  - `покупка_станка`
-  - `аренда`
-  - `сервис`
-  - `доставка`
-  - `прочее`
-- `topic`: непустая строка, до `80` символов после `trim`
-- `summary`: непустая строка, до `220` символов после `trim`
-- `result`: непустая строка, до `160` символов после `trim`
-- `nextStep`: непустая строка, до `160` символов после `trim`
-- `urgency`: enum
-  - `низкая`
-  - `средняя`
-  - `высокая`
-- `tags`: массив строк, от `1` до `5` элементов, каждый тег непустой после `trim`, без дублей
-- `confidence`: number от `0` до `1`
-
-### Невалидный ответ модели
-- Сначала применяется нормализация/постобработка:
-  - trim строковых полей
-  - ограничение длины полей `topic/summary/result/nextStep`
-  - нормализация `category` и `urgency` к допустимым enum
-  - очистка `tags`: удаление пустых значений и дублей, ограничение до `1..5`
-  - нормализация `confidence` в диапазон `0..1`
-- Если после нормализации привести ответ к допустимой схеме нельзя, сервис возвращает понятную ошибку `502 OpenAI error`.
-
-Пример ответа для дубля:
-```json
-{
-  "status": "duplicate",
-  "reason": "already_processed",
-  "phone": "+79991234567",
-  "callDateTime": "2026-03-11T15:00:00+03:00"
-}
-```
-
-## T2 integration scaffold
-
-Текущая интеграция t2 сделана только как безопасный каркас. Реальное подключение возможно только после получения официальной документации t2 API.
-
-Сейчас добавлено:
-- `src/services/t2Client.js`
-- `src/services/t2Mapper.js`
-- `src/services/t2IngestService.js`
-- `POST /dev/t2-ingest`
-
-`/dev/t2-ingest` нужен как локальный мост для теста будущего payload от t2 до подключения реального контракта.
-
-Реальные `endpoint/pathname`, webhook/polling contract и детали auth для t2 не реализованы без документации.
-
-Пример локального теста:
-```bash
-curl -X POST http://localhost:3000/dev/t2-ingest \
-  -H "Content-Type: application/json" \
-  -d '{
-    "phone": "+79991234567",
-    "callDateTime": "2026-03-11T20:00:00+03:00",
-    "transcript": "Клиент уточняет цену и наличие ролика"
-  }'
-```
-
-Пример альтернативного payload:
-```bash
-curl -X POST http://localhost:3000/dev/t2-ingest \
-  -H "Content-Type: application/json" \
-  -d '{
-    "caller": "+79991234567",
-    "createdAt": "2026-03-11T20:05:00+03:00",
-    "text": "Клиент уточняет цену и наличие ролика"
-  }'
-```
-
-## Локальное хранилище обработанных звонков
-
-- Файл store: `data/processed-calls.json`
-- Формат: JSON-массив записей с полями `fingerprint`, `phone`, `callDateTime`, `createdAt`
-- Файл и папка `data` создаются автоматически при первой проверке/записи
-
-Это dedup-store, который используется только для определения дублей.
-
-Сценарий проверки duplicate:
-1. Отправь обычный запрос в `/api/process-call` (номер не из ignore-list) -> ожидается `status: "processed"`.
-2. Повтори точно такой же запрос (`phone`, `callDateTime`, `transcript` те же) -> ожидается `status: "duplicate"`.
-
-## Локальная история обработки звонков (audit/debug)
-
-- Файл истории: `data/call-history.json`
-- Формат: JSON-массив записей по каждому сценарию обработки (`ignored`, `duplicate`, `processed`)
-- История не участвует в dedup-логике и не влияет на решение о дублях
-- Запись (`append`) сериализуется внутри одного процесса Node.js, чтобы одновременные append-вызовы не теряли записи из-за гонки `read/write`
-- Это не межпроцессная блокировка и не полноценная БД (при нескольких процессах/инстансах гарантии не даются)
-
-Поля записи истории:
-- `status`
-- `reason` (если есть)
-- `phone`
-- `callDateTime`
-- `createdAt`
-- `source` (`api_process_call`, `t2_ingest`, `unknown`)
-- `transcriptPreview` (первые `200` символов transcript после `trim`)
-- `analysis` (только для `status: "processed"`)
-- `telegramStatus` (только если есть `telegram.status`)
-
-Если запись истории не удалась, основной endpoint не ломается: ошибка логируется в консоль, а клиент получает обычный ответ по текущему сценарию.
-
-## Ошибки
-
-- `400 Validation error`:
-  - отсутствует или пустой `phone`, `callDateTime` или `transcript`
-  - невалидный JSON в теле запроса
-- `500 Server configuration error`:
-  - отсутствует `OPENAI_API_KEY` для неигнорируемого звонка
-- `502 OpenAI error`:
-  - ошибка запроса к OpenAI
-  - модель вернула невалидный JSON/структуру анализа, которую не удалось нормализовать до допустимой схемы
-- Ошибка Telegram:
-  - endpoint не падает и остаётся `200`
-  - в ответе возвращается `telegram.status: "failed"`
-  - при timeout Telegram-запрос отменяется через `AbortController`, чтобы endpoint не зависал дольше заданного лимита
+Короткий пошаговый deploy guide: `DEPLOYMENT_YC.md`.
+Локальный проверочный сценарий: `SMOKE_TEST.md`.

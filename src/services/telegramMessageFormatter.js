@@ -1,3 +1,5 @@
+const { formatDateTimeForTimezone } = require('../utils/dateTime');
+
 const EMPTY_VALUE = '—';
 
 function isNonEmptyString(value) {
@@ -24,7 +26,7 @@ function formatTags(tags) {
   return normalizedTags.length > 0 ? normalizedTags.join(', ') : EMPTY_VALUE;
 }
 
-function formatTelegramCallSummary({ phone, callDateTime, analysis } = {}) {
+function formatTelegramCallSummary({ phone, callDateTime, analysis, timeZone = 'Europe/Moscow' } = {}) {
   const normalizedAnalysis = analysis && typeof analysis === 'object' && !Array.isArray(analysis)
     ? analysis
     : {};
@@ -34,7 +36,7 @@ function formatTelegramCallSummary({ phone, callDateTime, analysis } = {}) {
     `Категория: ${normalizeSingleLineText(normalizedAnalysis.category)}`,
     `Тема: ${normalizeSingleLineText(normalizedAnalysis.topic)}`,
     `Телефон: ${normalizeSingleLineText(phone)}`,
-    `Дата и время: ${normalizeSingleLineText(callDateTime)}`,
+    `Дата и время: ${normalizeSingleLineText(formatDateTimeForTimezone(callDateTime, timeZone))}`,
     `Сводка: ${normalizeSingleLineText(normalizedAnalysis.summary)}`,
     `Результат: ${normalizeSingleLineText(normalizedAnalysis.result)}`,
     `Следующий шаг: ${normalizeSingleLineText(normalizedAnalysis.nextStep)}`,

@@ -1,0 +1,202 @@
+const express = require('express');
+const dotenv = require('dotenv');
+const { loadConfig, isNonEmptyString } = require('./config');
+const { createLogger, createRequestLoggerMiddleware, serializeError } = require('./logger');
+const { createOpenAIAnalyzer, OpenAIClientError } = require('./openaiClient');
+
+dotenv.config();
+
+function normalizeOptionalString(value) {
+  return isNonEmptyString(value) ? value.trim() : '';
+}
+
+function buildValidationErrors(payload) {
+  const errors = [];
+
+  if (!isNonEmptyString(payload.transcript)) {
+    errors.push({
+      field: 'transcript',
+      message: 'transcript is required and must be a non-empty string'
+    });
+  }
+
+  return errors;
+}
+
+function isAuthorized(req, sharedSecret) {
+  const providedSecret = req.get('x-gateway-secret');
+  return isNonEmptyString(providedSecret) && providedSecret === sharedSecret;
+}
+
+function sendKnownError(res, error, logger, requestId) {
+  if (error instanceof OpenAIClientError) {
+    logger.warn('analyze_failed_known_error', {
+      requestId,
+      error: serializeError(error)
+    });
+
+    return res.status(error.statusCode).json({
+      error: error.message,
+      code: error.code
+    });
+  }
+
+  logger.error('analyze_failed_unhandled_error', {
+    requestId,
+    error: serializeError(error)
+  });
+
+  return res.status(500).json({ error: 'Internal server error' });
+}
+
+function createApp({ config, logger, analyzeCall }) {
+  const app = express();
+
+  app.disable('x-powered-by');
+  app.use(express.json({ limit: config.bodyLimit }));
+  app.use(createRequestLoggerMiddleware(logger));
+
+  app.get('/healthz', (req, res) => {
+    return res.status(200).json({ status: 'ok' });
+  });
+
+  app.post('/analyze', async (req, res) => {
+    if (!isAuthorized(req, config.gatewaySharedSecret)) {
+      logger.warn('gateway_auth_failed', {
+        requestId: req.requestId,
+        route: '/analyze'
+      });
+
+      return res.status(401).json({
+        error: 'Unauthorized',
+        code: 'UNAUTHORIZED'
+      });
+    }
+
+    const payload = req.body || {};
+    const validationErrors = buildValidationErrors(payload);
+
+    if (validationErrors.length > 0) {
+      return res.status(400).json({
+        error: 'Validation error',
+        details: validationErrors
+      });
+    }
+
+    try {
+      const analysis = await analyzeCall({
+        requestId: normalizeOptionalString(payload.requestId) || req.requestId,
+        phone: normalizeOptionalString(payload.phone),
+        callDateTime: normalizeOptionalString(payload.callDateTime),
+        transcript: payload.transcript.trim()
+      });
+
+      return res.status(200).json(analysis);
+    } catch (error) {
+      return sendKnownError(res, error, logger, req.requestId);
+    }
+  });
+
+  app.use((err, req, res, next) => {
+    if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
+      return res.status(400).json({ error: 'Invalid JSON body' });
+    }
+
+    logger.error('express_unhandled_error', {
+      requestId: req.requestId,
+      error: serializeError(err)
+    });
+
+    return res.status(500).json({ error: 'Internal server error' });
+  });
+
+  return app;
+}
+
+function registerGracefulShutdown({ server, logger, shutdownTimeoutMs }) {
+  let shuttingDown = false;
+
+  const shutdown = (signal) => {
+    if (shuttingDown) {
+      return;
+    }
+
+    shuttingDown = true;
+    logger.info('shutdown_started', { signal });
+
+    const forceTimer = setTimeout(() => {
+      logger.error('shutdown_timeout_force_exit', {
+        signal,
+        timeoutMs: shutdownTimeoutMs
+      });
+      process.exit(1);
+    }, shutdownTimeoutMs);
+
+    forceTimer.unref();
+
+    server.close((serverError) => {
+      clearTimeout(forceTimer);
+
+      if (serverError) {
+        logger.error('http_server_close_failed', {
+          error: serializeError(serverError)
+        });
+        process.exit(1);
+      }
+
+      logger.info('shutdown_finished', { signal });
+      process.exit(0);
+    });
+  };
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+
+  process.on('uncaughtException', (error) => {
+    logger.error('uncaught_exception', {
+      error: serializeError(error)
+    });
+    shutdown('uncaughtException');
+  });
+
+  process.on('unhandledRejection', (reason) => {
+    logger.error('unhandled_rejection', {
+      reason: reason instanceof Error ? serializeError(reason) : reason
+    });
+  });
+}
+
+function bootstrap() {
+  const config = loadConfig();
+  const logger = createLogger({
+    level: config.logLevel,
+    service: 'ai-gateway'
+  });
+
+  const analyzeCall = createOpenAIAnalyzer(
+    config.openai,
+    logger.child({ component: 'openai_client' })
+  );
+
+  const app = createApp({
+    config,
+    logger,
+    analyzeCall
+  });
+
+  const server = app.listen(config.port, () => {
+    logger.info('server_started', {
+      port: config.port,
+      nodeEnv: config.nodeEnv,
+      model: config.openai.model
+    });
+  });
+
+  registerGracefulShutdown({
+    server,
+    logger,
+    shutdownTimeoutMs: config.shutdownTimeoutMs
+  });
+}
+
+bootstrap();

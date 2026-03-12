@@ -1,8 +1,5 @@
-const { openaiAnalyzeCall } = require('./openaiAnalyzeCall');
-const { sendTelegramMessage } = require('./sendTelegramMessage');
-const { hasProcessedCall, saveProcessedCall } = require('./processedCallsStore');
-const { appendCallHistory } = require('./callHistoryStore');
-const { normalizePhone, parseIgnoredPhones, isIgnoredPhone } = require('../utils/ignoredPhones');
+const { normalizePhone } = require('../utils/ignoredPhones');
+const { buildTranscriptHash, buildDedupKey } = require('../utils/dedup');
 
 function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim() !== '';
@@ -44,111 +41,238 @@ function getHistorySource(value) {
 }
 
 function buildTranscriptPreview(transcript) {
-  return transcript.trim().slice(0, 200);
+  return transcript.trim().slice(0, 240);
 }
 
-function buildHistoryRecord({ response, source, transcript }) {
-  const historyRecord = {
-    status: response.status,
-    phone: response.phone,
-    callDateTime: response.callDateTime,
-    createdAt: new Date().toISOString(),
-    source,
-    transcriptPreview: buildTranscriptPreview(transcript)
-  };
-
-  if (isNonEmptyString(response.reason)) {
-    historyRecord.reason = response.reason.trim();
-  }
-
-  if (
-    response.status === 'processed'
-    && response.analysis
-    && typeof response.analysis === 'object'
-    && !Array.isArray(response.analysis)
-  ) {
-    historyRecord.analysis = response.analysis;
-  }
-
-  if (isNonEmptyString(response?.telegram?.status)) {
-    historyRecord.telegramStatus = response.telegram.status.trim();
-  }
-
-  return historyRecord;
-}
-
-async function appendHistorySafely(response, source, transcript) {
-  const historyRecord = buildHistoryRecord({ response, source, transcript });
-
-  try {
-    await appendCallHistory(historyRecord);
-  } catch (error) {
-    console.error(`Call history append failed: ${error.message}`);
-  }
-}
-
-async function processCall(payload, ignoredPhonesRawValue, options = {}) {
-  const phone = normalizePhone(payload.phone);
-  const callDateTime = payload.callDateTime.trim();
-  const transcript = payload.transcript.trim();
-  const ignoredPhones = parseIgnoredPhones(ignoredPhonesRawValue);
-  const source = getHistorySource(options.source);
-
-  if (isIgnoredPhone(phone, ignoredPhones)) {
-    const response = {
-      status: 'ignored',
-      reason: 'internal_phone',
-      phone,
-      callDateTime
+function sanitizeErrorForAudit(error) {
+  if (!(error instanceof Error)) {
+    return {
+      message: 'Unknown error'
     };
-
-    await appendHistorySafely(response, source, transcript);
-    return response;
   }
 
-  const alreadyProcessed = await hasProcessedCall({
-    phone,
-    callDateTime,
-    transcript
-  });
-
-  if (alreadyProcessed) {
-    const response = {
-      status: 'duplicate',
-      reason: 'already_processed',
-      phone,
-      callDateTime
-    };
-
-    await appendHistorySafely(response, source, transcript);
-    return response;
-  }
-
-  const analysis = await openaiAnalyzeCall(transcript);
-  const telegram = await sendTelegramMessage({
-    phone,
-    callDateTime,
-    analysis
-  });
-  await saveProcessedCall({
-    phone,
-    callDateTime,
-    transcript
-  });
-
-  const response = {
-    status: 'processed',
-    phone,
-    callDateTime,
-    analysis,
-    telegram
+  return {
+    name: error.name,
+    message: error.message,
+    code: error.code,
+    statusCode: error.statusCode
   };
+}
 
-  await appendHistorySafely(response, source, transcript);
-  return response;
+function createCallProcessor({ storage, analyzeCall, sendTelegramMessage, logger }) {
+  async function appendAuditSafely(payload) {
+    try {
+      await storage.appendAuditEvent(payload);
+    } catch (error) {
+      logger.warn('audit_event_write_failed', {
+        error,
+        callEventId: payload?.callEventId,
+        eventType: payload?.eventType
+      });
+    }
+  }
+
+  async function processCall(payload, options = {}) {
+    const phoneRaw = payload.phone.trim();
+    const phone = normalizePhone(phoneRaw);
+    const callDateTime = payload.callDateTime.trim();
+    const transcript = payload.transcript.trim();
+    const requestId = isNonEmptyString(options.requestId) ? options.requestId.trim() : '';
+    const source = getHistorySource(options.source);
+    const transcriptHash = buildTranscriptHash(transcript);
+    const dedupKey = buildDedupKey({
+      phone,
+      callDateTime,
+      transcriptHash
+    });
+
+    const callEvent = await storage.createCallEvent({
+      source,
+      phoneRaw,
+      phoneNormalized: phone,
+      callDateTimeRaw: callDateTime,
+      transcriptHash,
+      transcriptPreview: buildTranscriptPreview(transcript),
+      transcriptLength: transcript.length,
+      dedupKey
+    });
+
+    const callEventId = callEvent.id;
+
+    await appendAuditSafely({
+      callEventId,
+      eventType: 'call_received',
+      payload: {
+        source,
+        dedupKey
+      }
+    });
+
+    if (await storage.isPhoneIgnored(phone)) {
+      const response = {
+        status: 'ignored',
+        reason: 'internal_phone',
+        phone,
+        callDateTime
+      };
+
+      await storage.updateCallEventStatus({
+        callEventId,
+        status: 'ignored',
+        reason: response.reason
+      });
+
+      await appendAuditSafely({
+        callEventId,
+        eventType: 'call_ignored',
+        payload: {
+          reason: response.reason
+        }
+      });
+
+      return response;
+    }
+
+    const dedupLock = await storage.acquireDedupKey({
+      dedupKey,
+      callEventId,
+      phoneNormalized: phone,
+      callDateTimeRaw: callDateTime
+    });
+
+    if (!dedupLock.acquired) {
+      const response = {
+        status: 'duplicate',
+        reason: 'already_processed',
+        phone,
+        callDateTime
+      };
+
+      await storage.updateCallEventStatus({
+        callEventId,
+        status: 'duplicate',
+        reason: response.reason
+      });
+
+      await appendAuditSafely({
+        callEventId,
+        eventType: 'call_duplicate',
+        payload: {
+          reason: response.reason,
+          dedupPreviousStatus: dedupLock.previousStatus
+        }
+      });
+
+      return response;
+    }
+
+    try {
+      const analysis = await analyzeCall({
+        requestId,
+        phone,
+        callDateTime,
+        transcript
+      });
+
+      await storage.saveSummary({
+        callEventId,
+        analysis
+      });
+
+      await appendAuditSafely({
+        callEventId,
+        eventType: 'analysis_completed',
+        payload: {
+          category: analysis.category,
+          urgency: analysis.urgency,
+          confidence: analysis.confidence
+        }
+      });
+
+      const telegramResult = await sendTelegramMessage({
+        phone,
+        callDateTime,
+        analysis
+      });
+
+      await storage.saveTelegramDelivery({
+        callEventId,
+        status: telegramResult.status,
+        httpStatus: telegramResult.httpStatus || null,
+        errorCode: telegramResult.errorCode || null,
+        errorMessage: telegramResult.errorMessage || null,
+        responsePayload: telegramResult.responsePayload || null
+      });
+
+      await appendAuditSafely({
+        callEventId,
+        eventType: 'telegram_delivery',
+        payload: {
+          status: telegramResult.status,
+          errorCode: telegramResult.errorCode || null,
+          httpStatus: telegramResult.httpStatus || null
+        }
+      });
+
+      await storage.completeDedupKey({
+        dedupKey,
+        status: 'processed',
+        callEventId
+      });
+
+      await storage.updateCallEventStatus({
+        callEventId,
+        status: 'processed',
+        telegramStatus: telegramResult.status
+      });
+
+      await appendAuditSafely({
+        callEventId,
+        eventType: 'call_processed',
+        payload: {
+          telegramStatus: telegramResult.status
+        }
+      });
+
+      return {
+        status: 'processed',
+        phone,
+        callDateTime,
+        analysis,
+        telegram: {
+          status: telegramResult.status
+        }
+      };
+    } catch (error) {
+      await storage.completeDedupKey({
+        dedupKey,
+        status: 'failed',
+        callEventId
+      });
+
+      await storage.updateCallEventStatus({
+        callEventId,
+        status: 'failed',
+        reason: 'processing_error'
+      });
+
+      await appendAuditSafely({
+        callEventId,
+        eventType: 'call_failed',
+        payload: sanitizeErrorForAudit(error)
+      });
+
+      throw error;
+    }
+  }
+
+  return {
+    validateCallPayload,
+    processCall
+  };
 }
 
 module.exports = {
-  validateCallPayload,
-  processCall
+  createCallProcessor,
+  validateCallPayload
 };

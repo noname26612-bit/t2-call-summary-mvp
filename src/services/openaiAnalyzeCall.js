@@ -14,7 +14,7 @@ const SYSTEM_PROMPT = `
 Нельзя использовать markdown, комментарии и пояснения.
 
 Требования к полям analysis:
-- category: одно значение из [запчасти, ремонт, покупка_станка, аренда, сервис, доставка, прочее]
+- category: одно значение из [продажа, сервис, запчасти, аренда, спам, прочее]
 - topic: непустая строка, максимум 80 символов после trim
 - summary: непустая строка, максимум 220 символов после trim
 - result: непустая строка, максимум 160 символов после trim
@@ -24,6 +24,8 @@ const SYSTEM_PROMPT = `
 - confidence: число от 0 до 1
 
 Если данных мало, используй category="прочее" и нейтральные формулировки.
+Если по смыслу это ремонт/доставка/обслуживание, используй category="сервис".
+Если по смыслу это покупка оборудования, используй category="продажа".
 `;
 
 const ANALYSIS_RESPONSE_SCHEMA = {
@@ -89,10 +91,8 @@ function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim() !== '';
 }
 
-async function openaiAnalyzeCall(transcript) {
-  const apiKey = process.env.OPENAI_API_KEY;
-
-  if (!isNonEmptyString(apiKey)) {
+function createOpenAIAnalyzeCall(config) {
+  if (!config || !isNonEmptyString(config.apiKey)) {
     throw new OpenAIAnalyzeError(
       'Server configuration error: OPENAI_API_KEY is required for call analysis',
       500,
@@ -100,77 +100,80 @@ async function openaiAnalyzeCall(transcript) {
     );
   }
 
-  const client = new OpenAI({ apiKey });
+  const client = new OpenAI({ apiKey: config.apiKey.trim() });
+  const model = isNonEmptyString(config.model) ? config.model.trim() : 'gpt-4.1-mini';
 
-  let completion;
-  try {
-    completion = await client.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
-      temperature: 0,
-      response_format: {
-        type: 'json_schema',
-        json_schema: {
-          name: 'call_analysis',
-          strict: true,
-          schema: ANALYSIS_RESPONSE_SCHEMA
-        }
-      },
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT.trim() },
-        {
-          role: 'user',
-          content: `Транскрипт звонка:\n${transcript}`
-        }
-      ]
-    });
-  } catch (error) {
-    throw new OpenAIAnalyzeError(
-      `OpenAI request failed: ${error.message}`,
-      502,
-      'OPENAI_REQUEST_FAILED'
-    );
-  }
-
-  const modelContent = completion.choices?.[0]?.message?.content;
-  if (!isNonEmptyString(modelContent)) {
-    throw new OpenAIAnalyzeError(
-      'OpenAI returned invalid JSON: empty response content',
-      502,
-      'OPENAI_EMPTY_RESPONSE'
-    );
-  }
-
-  let parsedJson;
-  try {
-    parsedJson = JSON.parse(modelContent);
-  } catch (error) {
-    throw new OpenAIAnalyzeError(
-      'OpenAI returned invalid JSON that cannot be parsed',
-      502,
-      'OPENAI_INVALID_JSON_PARSE'
-    );
-  }
-
-  try {
-    return normalizeAndValidateAnalysis(parsedJson, { transcript });
-  } catch (error) {
-    if (error instanceof AnalysisNormalizationError) {
-      const normalizedCode = typeof error.code === 'string' && error.code.trim() !== ''
-        ? error.code.trim()
-        : 'ANALYSIS_NORMALIZATION_FAILED';
-
+  return async function openaiAnalyzeCall(transcript) {
+    let completion;
+    try {
+      completion = await client.chat.completions.create({
+        model,
+        temperature: 0,
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
+            name: 'call_analysis',
+            strict: true,
+            schema: ANALYSIS_RESPONSE_SCHEMA
+          }
+        },
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT.trim() },
+          {
+            role: 'user',
+            content: `Транскрипт звонка:\n${transcript}`
+          }
+        ]
+      });
+    } catch (error) {
       throw new OpenAIAnalyzeError(
-        `OpenAI returned invalid analysis payload: ${error.message}`,
+        `OpenAI request failed: ${error.message}`,
         502,
-        `OPENAI_${normalizedCode}`
+        'OPENAI_REQUEST_FAILED'
       );
     }
 
-    throw error;
-  }
+    const modelContent = completion.choices?.[0]?.message?.content;
+    if (!isNonEmptyString(modelContent)) {
+      throw new OpenAIAnalyzeError(
+        'OpenAI returned invalid JSON: empty response content',
+        502,
+        'OPENAI_EMPTY_RESPONSE'
+      );
+    }
+
+    let parsedJson;
+    try {
+      parsedJson = JSON.parse(modelContent);
+    } catch (error) {
+      throw new OpenAIAnalyzeError(
+        'OpenAI returned invalid JSON that cannot be parsed',
+        502,
+        'OPENAI_INVALID_JSON_PARSE'
+      );
+    }
+
+    try {
+      return normalizeAndValidateAnalysis(parsedJson, { transcript });
+    } catch (error) {
+      if (error instanceof AnalysisNormalizationError) {
+        const normalizedCode = typeof error.code === 'string' && error.code.trim() !== ''
+          ? error.code.trim()
+          : 'ANALYSIS_NORMALIZATION_FAILED';
+
+        throw new OpenAIAnalyzeError(
+          `OpenAI returned invalid analysis payload: ${error.message}`,
+          502,
+          `OPENAI_${normalizedCode}`
+        );
+      }
+
+      throw error;
+    }
+  };
 }
 
 module.exports = {
-  openaiAnalyzeCall,
+  createOpenAIAnalyzeCall,
   OpenAIAnalyzeError
 };
