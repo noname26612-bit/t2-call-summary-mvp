@@ -79,7 +79,7 @@ const SYSTEM_PROMPT = `
 `;
 
 class OpenAIClientError extends Error {
-  constructor(message, statusCode = 502, code = 'OPENAI_CLIENT_ERROR') {
+  constructor(message, statusCode = 502, code = 'POLZA_CLIENT_ERROR') {
     super(message);
     this.name = 'OpenAIClientError';
     this.statusCode = statusCode;
@@ -91,26 +91,26 @@ function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim() !== '';
 }
 
-function sanitizeOpenAIErrorMessage(error) {
+function sanitizePolzaErrorMessage(error) {
   const status = Number.isInteger(error?.status) ? error.status : null;
 
   if (status === 401) {
-    return 'OpenAI authentication failed';
+    return 'Polza authentication failed';
   }
 
   if (status === 429) {
-    return 'OpenAI rate limit reached';
+    return 'Polza rate limit reached';
   }
 
   if (status && status >= 500) {
-    return 'OpenAI upstream server error';
+    return 'Polza upstream server error';
   }
 
   if (status) {
-    return `OpenAI request failed with status ${status}`;
+    return `Polza request failed with status ${status}`;
   }
 
-  return 'OpenAI request failed';
+  return 'Polza request failed';
 }
 
 function normalizeWhitespace(value) {
@@ -174,7 +174,7 @@ function normalizeTags(rawTags) {
 
 function normalizeAndValidateAnalysis(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new OpenAIClientError('OpenAI returned invalid analysis payload shape', 502, 'OPENAI_INVALID_PAYLOAD');
+    throw new OpenAIClientError('Polza returned invalid analysis payload shape', 502, 'POLZA_INVALID_PAYLOAD');
   }
 
   const normalized = {
@@ -224,11 +224,19 @@ function buildUserPrompt(payload) {
 
 function createOpenAIAnalyzer(config, logger) {
   if (!config || !isNonEmptyString(config.apiKey)) {
-    throw new OpenAIClientError('OPENAI_API_KEY is required', 500, 'OPENAI_MISSING_API_KEY');
+    throw new OpenAIClientError(
+      'POLZA_API_KEY is required (OPENAI_API_KEY is supported only as a temporary fallback)',
+      500,
+      'POLZA_MISSING_API_KEY'
+    );
   }
 
+  // Assumption/TODO:
+  // Current implementation expects Polza to be OpenAI-compatible for /chat/completions
+  // and response_format=json_schema. If Polza contract differs, adjust this request shape here.
   const client = new OpenAI({
     apiKey: config.apiKey.trim(),
+    baseURL: isNonEmptyString(config.baseUrl) ? config.baseUrl.trim() : undefined,
     timeout: config.timeoutMs
   });
 
@@ -262,18 +270,18 @@ function createOpenAIAnalyzer(config, logger) {
       });
     } catch (error) {
       throw new OpenAIClientError(
-        sanitizeOpenAIErrorMessage(error),
+        sanitizePolzaErrorMessage(error),
         502,
-        'OPENAI_REQUEST_FAILED'
+        'POLZA_REQUEST_FAILED'
       );
     }
 
     const modelContent = completion?.choices?.[0]?.message?.content;
     if (!isNonEmptyString(modelContent)) {
       throw new OpenAIClientError(
-        'OpenAI returned empty response content',
+        'Polza returned empty response content',
         502,
-        'OPENAI_EMPTY_RESPONSE'
+        'POLZA_EMPTY_RESPONSE'
       );
     }
 
@@ -282,15 +290,15 @@ function createOpenAIAnalyzer(config, logger) {
       parsedJson = JSON.parse(modelContent);
     } catch (error) {
       throw new OpenAIClientError(
-        'OpenAI returned invalid JSON that cannot be parsed',
+        'Polza returned invalid JSON that cannot be parsed',
         502,
-        'OPENAI_INVALID_JSON_PARSE'
+        'POLZA_INVALID_JSON_PARSE'
       );
     }
 
     const normalized = normalizeAndValidateAnalysis(parsedJson);
 
-    logger.info('openai_analysis_success', {
+    logger.info('polza_analysis_success', {
       requestId: payload.requestId || '',
       category: normalized.category,
       priority: normalized.priority,

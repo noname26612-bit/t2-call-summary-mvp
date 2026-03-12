@@ -30,21 +30,39 @@ Source of truth for current YC deploy progress and fixed decisions:
   - [x] verify `/healthz` in cloud
   - [x] run first production smoke test
 - [x] 4. Сделать первый production deploy
-- [ ] 5. Вынести вызов OpenAI в `feature/ai-gateway` (активный этап)
+- [ ] 5. Перевести AI upstream на Polza и стабилизировать production routing (активный этап)
   - [x] зафиксировать baseline status в `DEPLOY_PROGRESS.md`
   - [x] создать каркас сервиса `ai-gateway/`
   - [x] переключить main app runtime wiring на `AI_GATEWAY_URL`
   - [x] отключить прямой OpenAI path в runtime (`src/server.js`)
   - [x] обновить env main app (`AI_GATEWAY_URL`, `AI_GATEWAY_SHARED_SECRET`, `AI_GATEWAY_TIMEOUT_MS`)
-  - [ ] задеплоить gateway в поддерживаемом регионе
-  - [ ] сделать end-to-end smoke (gateway + PostgreSQL + Telegram)
-- [ ] 6. После стабилизации gateway вернуться к t2 production ingest
+  - [x] доказать локальный end-to-end через gateway:
+    - main app -> ai-gateway -> upstream AI -> PostgreSQL -> Telegram
+  - [x] подтвердить прямую API-доступность Polza
+  - [x] подтвердить локальный end-to-end именно через Polza:
+    - main app -> ai-gateway -> Polza -> PostgreSQL -> Telegram
+  - [ ] ротировать засвеченный Polza API key после локального теста
+  - [ ] зафиксировать Polza как основной upstream provider в runtime code path
+  - [ ] адаптировать production env на существующей Yandex VM:
+    - `main.env`
+    - `gateway.env`
+  - [ ] собрать и запушить production image для `ai-gateway`
+  - [ ] задеплоить `ai-gateway` на existing Yandex VM без отдельной gateway VM в другом регионе
+  - [ ] проверить `GET /healthz` main app на VM
+  - [ ] проверить `GET /healthz` ai-gateway на VM
+  - [ ] сделать production end-to-end smoke:
+    - main app -> ai-gateway -> Polza -> PostgreSQL -> Telegram
+  - [ ] подтвердить, что old direct OpenAI path remains disabled in production runtime
+- [ ] 6. После стабилизации production routing вернуться к t2 production ingest
 
 ## Контрольные follow-up задачи
 
 - [x] Синхронизировать category enum в коде с бизнес-категориями (продажа/сервис/запчасти/аренда/спам/прочее)
-- [ ] После first deploy: мониторить реальный peak load / latency / failures до любых topology changes
-- [ ] Повысить приоритет monitoring/alerts (healthz, 5xx, OpenAI/Telegram failures, DB connectivity)
+- [ ] После успешного production Polza cutover выполнить naming cleanup:
+  - `GATEWAY_SHARED_SECRET -> AI_GATEWAY_SHARED_SECRET`
+  - `OPENAI_* -> POLZA_*`
+- [ ] После Polza cutover: мониторить реальный peak load / latency / failures до любых topology changes
+- [ ] Добавить минимальный monitoring/alerts (healthz, 5xx, Polza/Telegram failures, DB connectivity)
 - [ ] Добавить monitoring по gateway (401/400/502 rate, latency, timeout rate)
 - [ ] Повысить приоритет retention policy для исторических таблиц PostgreSQL
 - [ ] Подготовить интеграцию Lockbox для секретов (вместо env-only)

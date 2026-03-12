@@ -1,0 +1,391 @@
+# DEPLOYMENT_YC.md
+
+Пошаговый beginner-friendly runbook для текущего production-контура в Yandex Cloud.
+
+## Scope guardrails
+
+- 1 VM (Yandex Compute Cloud)
+- 1 main app container
+- 1 `ai-gateway` container
+- 1 Managed PostgreSQL
+- 1 Container Registry
+- без Redis / queue / worker / Kubernetes / load balancer
+- не углубляем `t2` production ingest в этом этапе
+
+## Fixed strategy and status
+
+- fixed long-term provider strategy: **Polza**
+- mandatory integration boundary: `main app -> ai-gateway`
+- current stage: **production cutover of ai-gateway on the existing Yandex VM**
+- direct OpenAI runtime path не является target strategy
+
+## Current status before production gateway deploy
+
+The following is already confirmed locally:
+
+- ai-gateway runs successfully
+- Polza API connectivity is confirmed
+- `POST /analyze` works through Polza
+- main app successfully calls ai-gateway
+- full local path works:
+  - main app -> ai-gateway -> Polza -> PostgreSQL -> Telegram
+
+So the current YC task is not provider exploration anymore.
+
+The current YC task is:
+- reproduce the already-proven local routing on the existing Yandex VM
+- keep the deploy simple
+- avoid any topology expansion
+
+## Runtime naming status (important)
+
+Current runtime names in `ai-gateway` code (before separate code cutover):
+
+- `GATEWAY_SHARED_SECRET`
+- `OPENAI_API_KEY`
+- `OPENAI_MODEL`
+- `OPENAI_TIMEOUT_MS`
+
+Target names after separate technical code cutover:
+
+- `AI_GATEWAY_SHARED_SECRET`
+- `POLZA_API_KEY`
+- `POLZA_BASE_URL`
+- `POLZA_MODEL`
+
+Не отмечайте production cutover как complete, пока VM smoke не подтверждён.
+
+## Step 1. Rotate secrets
+
+### What we are doing
+Обновляем все секреты перед production-использованием.
+
+### Why we are doing it
+Компрометированные секреты нельзя использовать в production.
+
+### Where to run
+Кабинеты провайдеров + локальные env-файлы.
+
+### Exact action
+- Rotate the exposed Polza API key if it has not already been rotated after local testing
+- Rotate `TELEGRAM_BOT_TOKEN`
+- Rotate shared secret between main app and gateway
+
+### Expected result
+Есть новый комплект валидных секретов.
+
+### How to verify
+Локально оба сервиса стартуют без auth ошибок.
+
+### If the result is different
+Остановите deploy и исправьте секреты до следующего шага.
+
+## Step 2. Verify infra baseline in Yandex Cloud
+
+### What we are doing
+Проверяем, что инфраструктурная база готова.
+
+### Why we are doing it
+Без готового baseline контейнеры не запустятся стабильно.
+
+### Where to run
+Yandex Cloud Console и/или `yc` CLI.
+
+### Checklist
+- Registry существует
+- VM запущена
+- PostgreSQL cluster `Running`
+- VM и PostgreSQL в одной VPC
+- security groups соответствуют текущему baseline
+
+### Expected result
+Все пункты checklist подтверждены.
+
+### How to verify
+Сверьте состояния в Console (`Compute`, `PostgreSQL`, `Container Registry`, `VPC`).
+
+### If the result is different
+Исправьте несоответствия до публикации образов.
+
+## Step 3. Build and push images
+
+### What we are doing
+Собираем и публикуем образы main app и `ai-gateway`.
+
+### Why we are doing it
+VM должна запускать фиксированные теги из Registry.
+
+### Where to run
+Локальный терминал:
+`/Users/nonamenoname/Documents/Транскрибация/t2-call-summary-mvp`
+
+### Exact command
+```bash
+cd /Users/nonamenoname/Documents/Транскрибация/t2-call-summary-mvp
+export REGISTRY_ID="<ваш-registry-id>"
+
+# main app
+export APP_IMAGE="cr.yandex/${REGISTRY_ID}/t2-call-summary-mvp:prod-v2"
+docker build -t "${APP_IMAGE}" .
+docker push "${APP_IMAGE}"
+
+# ai-gateway
+export GATEWAY_IMAGE="cr.yandex/${REGISTRY_ID}/ai-gateway:prod-v2"
+docker build -t "${GATEWAY_IMAGE}" ./ai-gateway
+docker push "${GATEWAY_IMAGE}"
+```
+
+### Expected result
+Оба тега опубликованы в Registry.
+
+### How to verify
+```bash
+yc container image list --registry-id "${REGISTRY_ID}"
+```
+
+### If the result is different
+Проверьте docker auth и выбранный `REGISTRY_ID`.
+
+## Step 4. Prepare env files on VM
+
+### What we are doing
+Создаём отдельные env-файлы для main app и gateway.
+
+### Why we are doing it
+Контейнеры должны получить явные runtime-переменные.
+
+### Where to run
+SSH-сессия на VM.
+
+### Exact command
+```bash
+sudo mkdir -p /opt/t2-call-summary
+
+# Main app env
+sudo tee /opt/t2-call-summary/main.env >/dev/null <<'EOF_MAIN'
+PORT=3000
+APP_TIMEZONE=Europe/Moscow
+LOG_LEVEL=info
+AUTO_RUN_MIGRATIONS=true
+IGNORE_LIST_BOOTSTRAP_FROM_ENV=true
+
+DB_HOST=<private-fqdn-managed-postgresql-host>
+DB_PORT=6432
+DB_NAME=ats_call_summary
+DB_USER=<db-user>
+DB_PASSWORD=<db-password>
+DB_SSL=false
+
+AI_GATEWAY_URL=<local-vm-gateway-routing-url>
+AI_GATEWAY_SHARED_SECRET=<shared-secret>
+AI_GATEWAY_TIMEOUT_MS=20000
+
+TELEGRAM_BOT_TOKEN=<telegram-bot-token>
+TELEGRAM_CHAT_ID=<telegram-chat-id>
+EOF_MAIN
+
+# ai-gateway env
+sudo tee /opt/t2-call-summary/gateway.env >/dev/null <<'EOF_GATEWAY'
+PORT=3001
+LOG_LEVEL=info
+BODY_LIMIT=1mb
+SHUTDOWN_TIMEOUT_MS=10000
+
+# Current runtime secret name in gateway code:
+GATEWAY_SHARED_SECRET=<shared-secret>
+
+# Target provider names after code cutover:
+# POLZA_API_KEY=<polza-api-key>
+# POLZA_BASE_URL=https://polza.ai/api/v1
+# POLZA_MODEL=<polza-model>
+
+# Current runtime provider names before code cutover:
+OPENAI_API_KEY=<provider-api-key-current-runtime>
+OPENAI_MODEL=gpt-4.1-mini
+OPENAI_TIMEOUT_MS=20000
+EOF_GATEWAY
+```
+
+### Expected result
+Оба env-файла сохранены на VM.
+
+### How to verify
+```bash
+sudo ls -la /opt/t2-call-summary
+```
+
+### Important note
+Локально подтверждённое значение для main app -> gateway routing:
+`AI_GATEWAY_URL=http://127.0.0.1:3001`
+
+Для production на VM используйте только тот local VM routing URL, который отдельно подтверждён в вашем контейнерном runtime.
+
+### If the result is different
+Проверьте права пользователя и повторите команды `tee`.
+
+## Step 5. Run containers on existing VM
+
+### What we are doing
+Запускаем `ai-gateway` и main app на одной VM.
+
+### Why we are doing it
+Это текущий production target без расширения архитектуры.
+
+### Where to run
+SSH-сессия на VM.
+
+### Exact command
+```bash
+export REGISTRY_ID="<ваш-registry-id>"
+export APP_IMAGE="cr.yandex/${REGISTRY_ID}/t2-call-summary-mvp:prod-v2"
+export GATEWAY_IMAGE="cr.yandex/${REGISTRY_ID}/ai-gateway:prod-v2"
+
+docker pull "${APP_IMAGE}"
+docker pull "${GATEWAY_IMAGE}"
+
+docker rm -f ai-gateway || true
+docker rm -f t2-call-summary-mvp || true
+
+docker run -d \
+  --name ai-gateway \
+  --restart unless-stopped \
+  -p 3001:3001 \
+  --env-file /opt/t2-call-summary/gateway.env \
+  "${GATEWAY_IMAGE}"
+
+docker run -d \
+  --name t2-call-summary-mvp \
+  --restart unless-stopped \
+  -p 3000:3000 \
+  --env-file /opt/t2-call-summary/main.env \
+  "${APP_IMAGE}"
+```
+
+### Expected result
+Оба контейнера в статусе `Up`.
+
+### How to verify
+```bash
+docker ps --filter "name=ai-gateway" --filter "name=t2-call-summary-mvp"
+```
+
+### If the result is different
+Проверьте `docker logs` упавшего контейнера и исправьте env.
+
+## Step 6. Verify health endpoints
+
+### What we are doing
+Проверяем liveness main app и gateway.
+
+### Why we are doing it
+Без health-check нельзя переходить к smoke.
+
+### Where to run
+SSH-сессия на VM.
+
+### Exact command
+```bash
+curl -s http://127.0.0.1:3001/healthz
+curl -s http://127.0.0.1:3000/healthz
+```
+
+### Expected result
+- gateway: `{"status":"ok"}`
+- main app: JSON с `"status":"ok"` и `"database":"ok"`
+
+### How to verify
+Проверьте оба JSON-ответа и отсутствие критических ошибок в логах.
+
+### If the result is different
+Исправьте ошибки и перезапустите соответствующий контейнер.
+
+## Step 7. Run production smoke (end-to-end)
+
+### What we are doing
+Отправляем контрольный `process-call` в main app.
+
+### Why we are doing it
+Проверяем полный маршрут: app -> gateway -> provider -> DB -> Telegram.
+
+### Where to run
+Локальный терминал или SSH на VM.
+
+### Exact command
+```bash
+curl -s -X POST http://<VM_PUBLIC_IP>:3000/api/process-call \
+  -H "Content-Type: application/json" \
+  -d '{
+    "phone": "+7 (999) 123-45-67",
+    "callDateTime": "2026-03-13T15:30:00+03:00",
+    "transcript": "Клиент просит коммерческое предложение и срок поставки."
+  }'
+```
+
+### Expected result
+HTTP 200 и ожидаемый `status` (`processed`/`ignored`/`duplicate`).
+
+### How to verify
+Проверьте HTTP-ответ + логи контейнеров:
+```bash
+docker logs --tail 200 ai-gateway
+docker logs --tail 200 t2-call-summary-mvp
+```
+
+### If the result is different
+Проверьте секрет, URL gateway, provider credentials и доступ к БД.
+
+### Important note
+Production Polza phase нельзя отмечать complete, пока этот smoke не пройден на VM и не подтверждены записи в PostgreSQL и Telegram delivery.
+
+## Step 8. Verify DB writes in WebSQL
+
+### What we are doing
+Проверяем, что данные реально записались в PostgreSQL.
+
+### Why we are doing it
+Smoke считается успешным только при подтверждённой записи.
+
+### Where to run
+Yandex Cloud Console -> Managed PostgreSQL -> WebSQL.
+
+### Exact queries
+```sql
+SELECT COUNT(*) AS summaries_count FROM summaries;
+SELECT COUNT(*) AS events_count FROM call_events;
+SELECT COUNT(*) AS processed_count FROM processed_calls;
+SELECT COUNT(*) AS deliveries_count FROM telegram_deliveries;
+```
+
+### Expected result
+Счётчики увеличены после smoke.
+
+### How to verify
+Сравните значения до/после тестового запроса.
+
+### If the result is different
+Проверьте логи и параметры `DB_*`.
+
+## Step 9. Record progress
+
+### What we are doing
+Обновляем operational docs после значимого шага.
+
+### Why we are doing it
+Это текущий source of truth для проекта.
+
+### Where to run
+Локально, в репозитории.
+
+### Exact action
+1. Update `DEPLOY_PROGRESS.md`
+2. If milestone changed, sync `TASKS.md`
+3. If project-wide status changed, sync `README.md`
+
+### Expected result
+Документация синхронизирована с фактическим состоянием.
+
+### How to verify
+Сделайте `git diff` и проверьте, что статус в трёх файлах не конфликтует.
+
+### If the result is different
+Исправьте рассинхрон перед следующим deploy-шагом.

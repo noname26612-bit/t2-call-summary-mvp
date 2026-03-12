@@ -1,12 +1,18 @@
 # PROJECT_BRIEF.md
 
 ## Project
-t2 АТС -> API t2 -> мини-сервис -> OpenAI -> Telegram
+`t2 АТС -> API t2 -> main app -> ai-gateway -> AI provider -> Telegram`
+
+## Strategy status
+
+- fixed long-term upstream strategy: **Polza**
+- `ai-gateway` is mandatory integration layer
+- provider cutover in runtime: **in progress**
 
 ## Goal
 После каждого завершенного звонка:
 1. получить транскрипт
-2. проанализировать его через OpenAI
+2. проанализировать его через `ai-gateway` (target upstream: Polza)
 3. получить структурированный JSON
 4. отправить краткую сводку в Telegram
 
@@ -14,7 +20,7 @@ t2 АТС -> API t2 -> мини-сервис -> OpenAI -> Telegram
 Сервис должен:
 - получать новые звонки из t2
 - получать транскрипт
-- отправлять текст в OpenAI
+- отправлять текст в `ai-gateway`
 - получать структурированный JSON-ответ
 - отправлять итог в Telegram
 
@@ -43,14 +49,14 @@ t2 АТС -> API t2 -> мини-сервис -> OpenAI -> Telegram
 - звонки сотрудников
 - внутренние звонки
 
-Такие звонки должны отфильтровываться до отправки в OpenAI.
+Такие звонки должны отфильтровываться до отправки в `ai-gateway`.
 
 ## Technical direction
 Первый этап:
 - локальный MVP
 - mock-версия без реального API t2
 - Node.js + Express + JavaScript
-- OpenAI Responses API
+- AI analysis через `ai-gateway`
 - Telegram Bot API
 
 Второй этап:
