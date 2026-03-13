@@ -138,6 +138,9 @@ function loadConfig(options = {}) {
         : getOptionalString('AI_GATEWAY_SHARED_SECRET', ''),
       timeoutMs: parsePositiveInt('AI_GATEWAY_TIMEOUT_MS', DEFAULT_AI_GATEWAY_TIMEOUT_MS)
     },
+    ingest: {
+      sharedSecret: getOptionalString('INGEST_SHARED_SECRET', '')
+    },
     telegram: {
       botToken: validateRuntimeSecrets
         ? getRequiredString('TELEGRAM_BOT_TOKEN')

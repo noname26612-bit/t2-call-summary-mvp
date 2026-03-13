@@ -140,6 +140,7 @@ Runtime и документация синхронизированы с этим
 - `LOG_LEVEL=info`
 - `IGNORE_LIST_BOOTSTRAP_FROM_ENV=true`
 - `AI_GATEWAY_TIMEOUT_MS=20000`
+- `INGEST_SHARED_SECRET` (опционально; если задан, для `POST /api/process-call` обязателен header `X-Ingest-Secret`)
 
 Локальное значение для main app -> gateway routing:
 

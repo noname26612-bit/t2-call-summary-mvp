@@ -7,6 +7,19 @@ const LEVELS = {
   error: 40
 };
 
+function normalizeRequestId(value) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  const trimmed = value.trim();
+  if (trimmed === '') {
+    return '';
+  }
+
+  return trimmed.slice(0, 128);
+}
+
 function serializeError(error) {
   if (!(error instanceof Error)) {
     return error;
@@ -85,7 +98,7 @@ function createLogger(options = {}) {
 
 function createRequestLoggerMiddleware(logger) {
   return (req, res, next) => {
-    const requestId = crypto.randomUUID();
+    const requestId = normalizeRequestId(req.get('x-request-id')) || crypto.randomUUID();
     const startTime = process.hrtime.bigint();
 
     req.requestId = requestId;

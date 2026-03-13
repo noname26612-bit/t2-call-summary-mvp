@@ -12,6 +12,36 @@ const { createT2IngestService } = require('./services/t2IngestService');
 
 dotenv.config();
 
+function isNonEmptyString(value) {
+  return typeof value === 'string' && value.trim() !== '';
+}
+
+function normalizePhoneLast4(phone) {
+  if (!isNonEmptyString(phone)) {
+    return '';
+  }
+
+  const digits = phone.replace(/\D/g, '');
+  return digits.slice(-4);
+}
+
+function getTranscriptLength(transcript) {
+  if (!isNonEmptyString(transcript)) {
+    return 0;
+  }
+
+  return transcript.trim().length;
+}
+
+function isIngestAuthorized(req, ingressSharedSecret) {
+  if (!isNonEmptyString(ingressSharedSecret)) {
+    return true;
+  }
+
+  const providedSecret = req.get('x-ingest-secret');
+  return isNonEmptyString(providedSecret) && providedSecret === ingressSharedSecret;
+}
+
 function sendKnownError(res, error, logger, context) {
   if (error && Number.isInteger(error.statusCode)) {
     logger.warn('request_failed_known_error', {
@@ -33,7 +63,14 @@ function sendKnownError(res, error, logger, context) {
   return res.status(500).json({ error: 'Internal server error' });
 }
 
-function createApp({ logger, storage, processCall, ingestT2Call, appTimezone }) {
+function createApp({
+  logger,
+  storage,
+  processCall,
+  ingestT2Call,
+  appTimezone,
+  ingestSharedSecret
+}) {
   const app = express();
 
   app.disable('x-powered-by');
@@ -103,14 +140,44 @@ function createApp({ logger, storage, processCall, ingestT2Call, appTimezone }) 
 
   app.post('/api/process-call', async (req, res) => {
     const payload = req.body || {};
+
+    if (!isIngestAuthorized(req, ingestSharedSecret)) {
+      logger.warn('ingest_auth_rejected', {
+        requestId: req.requestId,
+        route: '/api/process-call',
+        hasSecretHeader: isNonEmptyString(req.get('x-ingest-secret'))
+      });
+
+      return res.status(401).json({
+        error: 'Unauthorized ingest request',
+        code: 'INGEST_UNAUTHORIZED'
+      });
+    }
+
     const validationErrors = validateCallPayload(payload);
 
     if (validationErrors.length > 0) {
+      logger.warn('ingest_validation_rejected', {
+        requestId: req.requestId,
+        route: '/api/process-call',
+        fields: validationErrors.map((item) => item.field),
+        transcriptLength: getTranscriptLength(payload.transcript)
+      });
+
       return res.status(400).json({
         error: 'Validation error',
+        message: 'Invalid ingest payload',
         details: validationErrors
       });
     }
+
+    logger.info('ingest_request_accepted', {
+      requestId: req.requestId,
+      route: '/api/process-call',
+      phoneLast4: normalizePhoneLast4(payload.phone),
+      callDateTimePresent: isNonEmptyString(payload.callDateTime),
+      transcriptLength: getTranscriptLength(payload.transcript)
+    });
 
     try {
       const response = await processCall(payload, {
@@ -251,7 +318,8 @@ async function bootstrap() {
     storage,
     processCall,
     ingestT2Call,
-    appTimezone: config.appTimezone
+    appTimezone: config.appTimezone,
+    ingestSharedSecret: config.ingest.sharedSecret
   });
 
   const server = app.listen(config.port, () => {
