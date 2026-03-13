@@ -76,9 +76,9 @@ Source of truth for current YC deploy progress and fixed decisions:
   - [x] 8.5 Добавить controlled rollout switches (`TELE2_INGEST_ENABLED`, dry-run mode)
   - [ ] 8.6 Подтвердить с Tele2 точные field paths и auth details
   - [ ] 8.7 Заполнить `TELE2_*_FIELD_PATH` в production env после подтверждения payload contract
-  - [ ] 8.8 Выполнить preflight checklist перед ограниченным live-smoke
+  - [x] 8.8 Выполнить preflight checklist для production rollout с `TELE2_INGEST_ENABLED=false`
   - [ ] 8.9 Выполнить smoke checklist (dry-run + 1-2 реальных запроса)
-  - [ ] 8.10 Выполнить production verification checklist и зафиксировать результат в `DEPLOY_PROGRESS.md`
+  - [x] 8.10 Выполнить production verification checklist и зафиксировать результат в `DEPLOY_PROGRESS.md`
   - [ ] 8.11 Проверить rollback checklist в боевом runbook перед full cutover
 
 ## Контрольные follow-up задачи

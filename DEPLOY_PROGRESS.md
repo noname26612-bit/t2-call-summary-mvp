@@ -105,10 +105,23 @@ These decisions are considered fixed unless explicitly changed:
     - `TELE2_TRANSCRIPT_FIELD_PATH`
   - canonical processing path is unchanged:
     - main app -> ai-gateway -> provider -> PostgreSQL -> Telegram
+- Tele2 adapter production rollout completed in safe mode (flag off):
+  - main app deployed with image `t2-call-summary:prod-v5-tele2-adapter-amd64`
+  - production env confirmed:
+    - `TELE2_INGEST_ENABLED=false`
+    - `INGEST_SHARED_SECRET` is non-empty
+    - `AI_GATEWAY_URL=http://ai-gateway:3001`
+  - production verification passed after rollout:
+    - `GET /healthz` main app = ok
+    - `GET /healthz` ai-gateway = ok
+    - baseline check passed (`LOG_WINDOW=15m`)
+    - `POST /api/process-call` returned HTTP 200 (`status=processed`)
+    - `POST /api/ingest/tele2` returned HTTP 503 with `TELE2_INGEST_DISABLED`
+  - `ai-gateway` runtime/container/image remained unchanged
 
 ## Current production image tags (active)
 
-- main app: `t2-call-summary:prod-v4-ingest-hardening-amd64`
+- main app: `t2-call-summary:prod-v5-tele2-adapter-amd64`
 - gateway: `ai-gateway:prod-v3-monitoring-amd64`
 
 ## Current production routing note
@@ -125,7 +138,8 @@ For the current production baseline on the existing Yandex VM:
 Infrastructure/monitoring baseline phase is completed and validated on the current production VM baseline.
 Ingest hardening rollout for `POST /api/process-call` is completed and validated in production.
 Tele2 adapter/integration prep is implemented in code with rollback-safe switches.
-Next real milestone: confirm Tele2 payload fields and run controlled production cutover checks.
+Tele2 adapter is deployed to production with flag off and validated.
+Next real milestone: obtain real Tele2 payload, confirm field paths, and run controlled dry-run checks before live switch.
 
 ## Runtime naming status
 
@@ -143,9 +157,10 @@ Status:
 ## Next steps
 
 1. Rotate the exposed Polza API key if it has not already been rotated after local testing, then re-run a short production smoke.
-2. Confirm Tele2 payload field paths and auth details, then fill `TELE2_*_FIELD_PATH` values.
-3. Run controlled dry-run checks through `POST /api/ingest/tele2` before any live traffic switch.
-4. Keep lightweight monitoring checks running during ingest wiring and early live traffic.
+2. Obtain real Tele2 payload samples and confirm field paths/auth details.
+3. Fill `TELE2_*_FIELD_PATH` values and run controlled dry-run checks through `POST /api/ingest/tele2`.
+4. Keep `TELE2_INGEST_ENABLED=false` until dry-run results are stable and explicitly approved.
+5. Keep lightweight monitoring checks running during ingest wiring and early live traffic.
 
 ## Open checks
 
