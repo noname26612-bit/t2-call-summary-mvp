@@ -441,7 +441,7 @@ function validateNormalizedAnalysis(analysis) {
 
 function normalizeAndValidateAnalysis(payload, options = {}) {
   if (!isPlainObject(payload)) {
-    throw new AnalysisNormalizationError('OpenAI analysis payload must be an object', 'ANALYSIS_INVALID_JSON');
+    throw new AnalysisNormalizationError('Analysis payload must be an object', 'ANALYSIS_INVALID_JSON');
   }
 
   const transcript = stringFromUnknown(options.transcript);

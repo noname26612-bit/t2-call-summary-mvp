@@ -1,7 +1,7 @@
 {
   "name": "ai-gateway",
   "version": "1.0.0",
-  "description": "Thin AI gateway for OpenAI API access from a supported region",
+  "description": "Thin AI gateway for Polza upstream integration (OpenAI-compatible API)",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
@@ -9,7 +9,7 @@
   },
   "keywords": [
     "gateway",
-    "openai",
+    "polza",
     "express"
   ],
   "author": "",
