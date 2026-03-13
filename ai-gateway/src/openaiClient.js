@@ -290,6 +290,32 @@ function decodeAudioBase64(rawAudioBase64) {
   return buffer;
 }
 
+function resolveAudioBuffer(payload) {
+  if (Buffer.isBuffer(payload?.audioBuffer)) {
+    const buffer = payload.audioBuffer;
+
+    if (buffer.length === 0) {
+      throw new OpenAIClientError(
+        'Uploaded audio file is empty',
+        400,
+        'TRANSCRIBE_VALIDATION_FAILED'
+      );
+    }
+
+    if (buffer.length > MAX_TRANSCRIBE_AUDIO_BYTES) {
+      throw new OpenAIClientError(
+        `Audio payload is too large (max ${MAX_TRANSCRIBE_AUDIO_BYTES} bytes)`,
+        413,
+        'TRANSCRIBE_AUDIO_TOO_LARGE'
+      );
+    }
+
+    return buffer;
+  }
+
+  return decodeAudioBase64(payload?.audioBase64);
+}
+
 function resolveTranscriptionFileExtension({ fileName, mimeType }) {
   const fromName = isNonEmptyString(fileName) ? path.extname(fileName.trim()) : '';
   const allowed = new Set(['.mp3', '.wav', '.m4a', '.ogg', '.webm', '.mp4', '.mpeg']);
@@ -430,7 +456,7 @@ function createOpenAITranscriber(config, logger) {
   const { client, transcribeModel } = createPolzaClient(config);
 
   return async function transcribeAudio(payload) {
-    const audioBuffer = decodeAudioBase64(payload?.audioBase64);
+    const audioBuffer = resolveAudioBuffer(payload);
     const extension = resolveTranscriptionFileExtension({
       fileName: payload?.fileName || '',
       mimeType: payload?.mimeType || ''

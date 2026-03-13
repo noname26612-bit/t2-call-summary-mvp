@@ -44,12 +44,13 @@ Current follow-ups:
 
 - `GET /healthz` -> `{ "status": "ok" }`
 - `POST /analyze` -> возвращает структурированный анализ
-- `POST /transcribe` -> возвращает транскрипт аудио через Polza
+- `POST /transcribe` -> возвращает транскрипт аудио через Polza (preferred: `multipart/form-data` upload field `audio`)
 
 ## Runtime naming (canonical)
 
 - shared secret: `AI_GATEWAY_SHARED_SECRET`
 - provider vars: `POLZA_API_KEY`, `POLZA_BASE_URL`, `POLZA_MODEL`, `POLZA_TRANSCRIBE_MODEL`, `POLZA_TIMEOUT_MS`
+- upload guard var: `TRANSCRIBE_FILE_MAX_BYTES` (default `20971520`)
 - legacy names `GATEWAY_SHARED_SECRET` and `OPENAI_*` are no longer used by `ai-gateway` runtime code
 
 ## Requirements
@@ -139,14 +140,11 @@ Expected response shape:
 
 ```bash
 curl -s -X POST http://localhost:3001/transcribe \
-  -H "Content-Type: application/json" \
   -H "x-gateway-secret: replace_with_strong_shared_secret" \
-  -d '{
-    "requestId": "req-stt-1",
-    "fileName": "sample.mp3",
-    "mimeType": "audio/mpeg",
-    "audioBase64": "SUQzBAAAAAAAF1RTU0UAAAAPAAADTGF2ZjU4Lj..."
-  }'
+  -F "requestId=req-stt-1" \
+  -F "fileName=sample.mp3" \
+  -F "mimeType=audio/mpeg" \
+  -F "audio=@./sample.mp3;type=audio/mpeg"
 ```
 
 Expected response shape:
@@ -162,6 +160,6 @@ Expected response shape:
 ## API errors
 
 - `401` если отсутствует или неверный `x-gateway-secret`
-- `400` если `transcript`/`audioBase64` пустой или тело запроса невалидный JSON
-- `413` если JSON body превышает `BODY_LIMIT`
+- `400` если `transcript`/`audio` пустой, multipart невалиден или JSON невалиден
+- `413` если файл больше `TRANSCRIBE_FILE_MAX_BYTES` или JSON body превышает `BODY_LIMIT`
 - `502` если ошибка обращения к upstream provider

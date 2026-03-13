@@ -403,23 +403,27 @@ async function transcribeViaGateway({
   timeoutMs
 }) {
   const audioBuffer = fs.readFileSync(tempFilePath);
-  const audioBase64 = audioBuffer.toString('base64');
   const base = aiGatewayUrl.endsWith('/') ? aiGatewayUrl : `${aiGatewayUrl}/`;
   const normalizedPath = aiGatewayTranscribePath.replace(/^\/+/, '');
   const url = new URL(normalizedPath, base).toString();
+  const uploadFileName = `${sanitizeFileName(recordFileName)}.mp3`;
+
+  const formData = new FormData();
+  formData.append('requestId', `manual-${Date.now()}`);
+  formData.append('fileName', uploadFileName);
+  formData.append('mimeType', 'audio/mpeg');
+  formData.append(
+    'audio',
+    new Blob([audioBuffer], { type: 'audio/mpeg' }),
+    uploadFileName
+  );
 
   const response = await fetchWithTimeout(url, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json',
       'x-gateway-secret': aiGatewaySecret
     },
-    body: JSON.stringify({
-      requestId: `manual-${Date.now()}`,
-      fileName: `${sanitizeFileName(recordFileName)}.mp3`,
-      mimeType: 'audio/mpeg',
-      audioBase64
-    })
+    body: formData
   }, timeoutMs);
 
   const raw = await response.text();

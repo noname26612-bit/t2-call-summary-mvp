@@ -1,4 +1,5 @@
 const express = require('express');
+const multer = require('multer');
 const dotenv = require('dotenv');
 const { loadConfig, isNonEmptyString } = require('./config');
 const { createLogger, createRequestLoggerMiddleware, serializeError } = require('./logger');
@@ -27,13 +28,13 @@ function buildValidationErrors(payload) {
   return errors;
 }
 
-function buildTranscriptionValidationErrors(payload) {
+function buildTranscriptionValidationErrors(payload, hasAudioFile) {
   const errors = [];
 
-  if (!isNonEmptyString(payload.audioBase64)) {
+  if (!hasAudioFile && !isNonEmptyString(payload.audioBase64)) {
     errors.push({
-      field: 'audioBase64',
-      message: 'audioBase64 is required and must be a non-empty string'
+      field: 'audio',
+      message: 'audio multipart file (field "audio") or audioBase64 is required'
     });
   }
 
@@ -43,6 +44,33 @@ function buildTranscriptionValidationErrors(payload) {
 function isAuthorized(req, sharedSecret) {
   const providedSecret = req.get('x-gateway-secret');
   return isNonEmptyString(providedSecret) && providedSecret === sharedSecret;
+}
+
+function isLikelyAudioMimeType(value) {
+  if (!isNonEmptyString(value)) {
+    return true;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  return normalized.startsWith('audio/') || normalized === 'application/octet-stream';
+}
+
+function createAuthGuard({ logger, sharedSecret, route }) {
+  return function routeAuthGuard(req, res, next) {
+    if (!isAuthorized(req, sharedSecret)) {
+      logger.warn('gateway_auth_failed', {
+        requestId: req.requestId,
+        route
+      });
+
+      return res.status(401).json({
+        error: 'Unauthorized',
+        code: 'UNAUTHORIZED'
+      });
+    }
+
+    return next();
+  };
 }
 
 function sendKnownError(res, error, logger, requestId) {
@@ -68,10 +96,21 @@ function sendKnownError(res, error, logger, requestId) {
 
 function createApp({ config, logger, analyzeCall, transcribeAudio }) {
   const app = express();
+  const transcribeUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+      fileSize: config.transcribeFileMaxBytes
+    }
+  });
 
   app.disable('x-powered-by');
   app.use(express.json({ limit: config.bodyLimit }));
   app.use(createRequestLoggerMiddleware(logger));
+  const transcribeAuthGuard = createAuthGuard({
+    logger,
+    sharedSecret: config.gatewaySharedSecret,
+    route: '/transcribe'
+  });
 
   app.get('/healthz', (req, res) => {
     return res.status(200).json({ status: 'ok' });
@@ -114,21 +153,18 @@ function createApp({ config, logger, analyzeCall, transcribeAudio }) {
     }
   });
 
-  app.post('/transcribe', async (req, res) => {
-    if (!isAuthorized(req, config.gatewaySharedSecret)) {
-      logger.warn('gateway_auth_failed', {
-        requestId: req.requestId,
-        route: '/transcribe'
-      });
+  app.post('/transcribe', transcribeAuthGuard, transcribeUpload.single('audio'), async (req, res) => {
+    const payload = req.body || {};
+    const hasAudioFile = Buffer.isBuffer(req?.file?.buffer) && req.file.buffer.length > 0;
+    const effectiveMimeType = normalizeOptionalString(payload.mimeType) || normalizeOptionalString(req?.file?.mimetype);
+    const validationErrors = buildTranscriptionValidationErrors(payload, hasAudioFile);
 
-      return res.status(401).json({
-        error: 'Unauthorized',
-        code: 'UNAUTHORIZED'
+    if (hasAudioFile && !isLikelyAudioMimeType(effectiveMimeType)) {
+      validationErrors.push({
+        field: 'mimeType',
+        message: 'uploaded file mimeType must be audio/* (or application/octet-stream)'
       });
     }
-
-    const payload = req.body || {};
-    const validationErrors = buildTranscriptionValidationErrors(payload);
 
     if (validationErrors.length > 0) {
       return res.status(400).json({
@@ -140,9 +176,10 @@ function createApp({ config, logger, analyzeCall, transcribeAudio }) {
     try {
       const response = await transcribeAudio({
         requestId: normalizeOptionalString(payload.requestId) || req.requestId,
-        audioBase64: payload.audioBase64.trim(),
-        fileName: normalizeOptionalString(payload.fileName),
-        mimeType: normalizeOptionalString(payload.mimeType)
+        audioBuffer: hasAudioFile ? req.file.buffer : undefined,
+        audioBase64: !hasAudioFile ? normalizeOptionalString(payload.audioBase64) : '',
+        fileName: normalizeOptionalString(payload.fileName) || normalizeOptionalString(req?.file?.originalname),
+        mimeType: effectiveMimeType
       });
 
       return res.status(200).json(response);
@@ -152,6 +189,20 @@ function createApp({ config, logger, analyzeCall, transcribeAudio }) {
   });
 
   app.use((err, req, res, next) => {
+    if (err instanceof multer.MulterError) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({
+          error: `Uploaded audio file is too large (max ${config.transcribeFileMaxBytes} bytes)`,
+          code: 'TRANSCRIBE_AUDIO_TOO_LARGE'
+        });
+      }
+
+      return res.status(400).json({
+        error: 'Invalid multipart form-data',
+        code: 'TRANSCRIBE_MULTIPART_INVALID'
+      });
+    }
+
     if (err && err.type === 'entity.too.large') {
       return res.status(413).json({
         error: 'Request body is too large',

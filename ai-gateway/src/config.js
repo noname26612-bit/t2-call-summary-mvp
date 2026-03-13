@@ -6,6 +6,7 @@ const DEFAULT_POLZA_TRANSCRIBE_MODEL = 'whisper-1';
 const DEFAULT_POLZA_TIMEOUT_MS = 20000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10000;
 const DEFAULT_BODY_LIMIT = '1mb';
+const DEFAULT_TRANSCRIBE_FILE_MAX_BYTES = 20 * 1024 * 1024;
 
 function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim() !== '';
@@ -74,6 +75,11 @@ function loadConfig() {
     port: parsePositiveIntFromNames('PORT', [], DEFAULT_PORT),
     logLevel: getOptionalStringFromNames(['LOG_LEVEL'], DEFAULT_LOG_LEVEL),
     bodyLimit: getOptionalStringFromNames(['BODY_LIMIT'], DEFAULT_BODY_LIMIT),
+    transcribeFileMaxBytes: parsePositiveIntFromNames(
+      'TRANSCRIBE_FILE_MAX_BYTES',
+      [],
+      DEFAULT_TRANSCRIBE_FILE_MAX_BYTES
+    ),
     shutdownTimeoutMs: parsePositiveIntFromNames('SHUTDOWN_TIMEOUT_MS', [], DEFAULT_SHUTDOWN_TIMEOUT_MS),
     gatewaySharedSecret: getRequiredStringFromNames('AI_GATEWAY_SHARED_SECRET'),
     openai: {
