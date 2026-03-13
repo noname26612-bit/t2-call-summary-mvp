@@ -94,6 +94,17 @@ These decisions are considered fixed unless explicitly changed:
   - ingest structured logs (`ingest_auth_rejected`, `ingest_validation_rejected`, `ingest_request_accepted`) are present
   - transcript phrase is not leaked to logs
 - `ai-gateway` runtime/container/image remained unchanged during this rollout
+- Tele2 integration-ready prep is completed in code (no full production cutover yet):
+  - added `POST /api/ingest/tele2` as dedicated adapter entrypoint
+  - endpoint is protected by the existing optional ingress secret (`X-Ingest-Secret`)
+  - endpoint is feature-gated (`TELE2_INGEST_ENABLED`, default `false`)
+  - added dry-run mode (`X-Ingest-Dry-Run: true` or `?dryRun=1`) for safe payload verification
+  - payload normalization now uses configurable path mapping:
+    - `TELE2_PHONE_FIELD_PATH`
+    - `TELE2_CALL_DATETIME_FIELD_PATH`
+    - `TELE2_TRANSCRIPT_FIELD_PATH`
+  - canonical processing path is unchanged:
+    - main app -> ai-gateway -> provider -> PostgreSQL -> Telegram
 
 ## Current production image tags (active)
 
@@ -113,7 +124,8 @@ For the current production baseline on the existing Yandex VM:
 
 Infrastructure/monitoring baseline phase is completed and validated on the current production VM baseline.
 Ingest hardening rollout for `POST /api/process-call` is completed and validated in production.
-Next real milestone: `t2` production ingest wiring / cutover preparation.
+Tele2 adapter/integration prep is implemented in code with rollback-safe switches.
+Next real milestone: confirm Tele2 payload fields and run controlled production cutover checks.
 
 ## Runtime naming status
 
@@ -131,14 +143,17 @@ Status:
 ## Next steps
 
 1. Rotate the exposed Polza API key if it has not already been rotated after local testing, then re-run a short production smoke.
-2. Start `t2` production ingest wiring / cutover preparation with minimal scope and rollback safety.
-3. Keep lightweight monitoring checks running during ingest wiring and early live traffic.
+2. Confirm Tele2 payload field paths and auth details, then fill `TELE2_*_FIELD_PATH` values.
+3. Run controlled dry-run checks through `POST /api/ingest/tele2` before any live traffic switch.
+4. Keep lightweight monitoring checks running during ingest wiring and early live traffic.
 
 ## Open checks
 
 - verify request timeout and retries are acceptable for real call volume
 - rotate exposed Polza API key and any exposed development credentials before full production traffic
 - verify final provider/model naming in runtime env and docs
+- confirm exact Tele2 payload contract (field locations + datetime format + transcript size)
+- confirm Tele2 retry behavior and webhook timeout expectations
 
 ## Out of scope for this phase
 

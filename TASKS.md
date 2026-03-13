@@ -69,6 +69,17 @@ Source of truth for current YC deploy progress and fixed decisions:
   - [x] main app image обновлён до `t2-call-summary:prod-v4-ingest-hardening-amd64`
   - [x] `ai-gateway` не менялся (`ai-gateway:prod-v3-monitoring-amd64`)
 - [ ] 8. Next milestone: `t2` production ingest wiring / cutover preparation (текущий активный этап)
+  - [x] 8.1 Синхронизировать docs по факту завершённого ingest hardening rollout
+  - [x] 8.2 Выделить Tele2 adapter entrypoint `POST /api/ingest/tele2` без изменения `/api/process-call`
+  - [x] 8.3 Сохранить канонический processing flow (`/api/ingest/tele2 -> processCall -> ai-gateway -> provider`)
+  - [x] 8.4 Добавить safe handling missing/partial Tele2 fields (`400 invalid_t2_payload`, без transcript в логах)
+  - [x] 8.5 Добавить controlled rollout switches (`TELE2_INGEST_ENABLED`, dry-run mode)
+  - [ ] 8.6 Подтвердить с Tele2 точные field paths и auth details
+  - [ ] 8.7 Заполнить `TELE2_*_FIELD_PATH` в production env после подтверждения payload contract
+  - [ ] 8.8 Выполнить preflight checklist перед ограниченным live-smoke
+  - [ ] 8.9 Выполнить smoke checklist (dry-run + 1-2 реальных запроса)
+  - [ ] 8.10 Выполнить production verification checklist и зафиксировать результат в `DEPLOY_PROGRESS.md`
+  - [ ] 8.11 Проверить rollback checklist в боевом runbook перед full cutover
 
 ## Контрольные follow-up задачи
 
