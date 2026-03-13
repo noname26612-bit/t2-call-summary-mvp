@@ -87,10 +87,17 @@ These decisions are considered fixed unless explicitly changed:
 - operational lesson confirmed:
   - production VM architecture = `amd64`
   - production image builds must explicitly target `linux/amd64`
+- production ingest hardening for `POST /api/process-call` deployed and validated on VM:
+  - optional ingress auth via `INGEST_SHARED_SECRET` is active
+  - production verification passed for `401 / 400 / 200` scenarios
+  - Telegram delivery confirmed for accepted ingest check
+  - ingest structured logs (`ingest_auth_rejected`, `ingest_validation_rejected`, `ingest_request_accepted`) are present
+  - transcript phrase is not leaked to logs
+- `ai-gateway` runtime/container/image remained unchanged during this rollout
 
 ## Current production image tags (active)
 
-- main app: `t2-call-summary:prod-v3-monitoring-amd64`
+- main app: `t2-call-summary:prod-v4-ingest-hardening-amd64`
 - gateway: `ai-gateway:prod-v3-monitoring-amd64`
 
 ## Current production routing note
@@ -105,7 +112,8 @@ For the current production baseline on the existing Yandex VM:
 ## Current active checkpoint
 
 Infrastructure/monitoring baseline phase is completed and validated on the current production VM baseline.
-Next active stage: narrow and safe `t2` production ingest rollout.
+Ingest hardening rollout for `POST /api/process-call` is completed and validated in production.
+Next real milestone: `t2` production ingest wiring / cutover preparation.
 
 ## Runtime naming status
 
@@ -123,8 +131,8 @@ Status:
 ## Next steps
 
 1. Rotate the exposed Polza API key if it has not already been rotated after local testing, then re-run a short production smoke.
-2. Start staged `t2` production ingest rollout with minimal scope and rollback safety.
-3. Keep lightweight monitoring checks running during ingest rollout and early live traffic.
+2. Start `t2` production ingest wiring / cutover preparation with minimal scope and rollback safety.
+3. Keep lightweight monitoring checks running during ingest wiring and early live traffic.
 
 ## Open checks
 

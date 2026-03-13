@@ -21,7 +21,8 @@ Production Polza cutover на existing Yandex VM завершён и подтв�
 - external EU/VPS gateway host не используется
 - naming cleanup for `ai-gateway` env completed (`AI_GATEWAY_SHARED_SECRET`, `POLZA_*`)
 - lightweight monitoring baseline выкачен на production VM и production verification успешно пройдена
-- следующий этап: staged `t2` production ingest rollout
+- production ingest hardening для `POST /api/process-call` выкачен и validated (`401/400/200`, Telegram `sent`, transcript в лог не течёт)
+- следующий реальный milestone: `t2` production ingest wiring / cutover preparation
 
 ## Текущая архитектура
 
@@ -105,8 +106,8 @@ Topology changes (worker/queue/extra services) не требуются на эт
 
 `POST /dev/t2-ingest` остаётся scaffold/debug-маршрутом.
 
-На текущем этапе приоритет: stable production routing (runtime + provider cutover + deploy),
-а не углубление реального t2 production ingest.
+В production для `POST /api/process-call` ingest hardening уже выкачен и validated.
+Следующий milestone: `t2` production ingest wiring / cutover preparation.
 
 ## Business categories (документированная целевая модель)
 
@@ -208,12 +209,13 @@ Current confirmed production baseline:
 - old direct OpenAI path is not the active production runtime route
 - external EU/VPS gateway host is not used
 - active production image tags:
-  - `t2-call-summary:prod-v3-monitoring-amd64`
+  - `t2-call-summary:prod-v4-ingest-hardening-amd64`
   - `ai-gateway:prod-v3-monitoring-amd64`
+- during ingest hardening rollout `ai-gateway` runtime/image was not changed
 
 Current next follow-ups:
 - rotate the exposed Polza API key if it has not already been rotated after local testing
-- start staged `t2` production ingest rollout with rollback safety
+- start `t2` production ingest wiring / cutover preparation with rollback safety
 
 Important:
 - production Polza cutover на existing Yandex VM уже подтверждён

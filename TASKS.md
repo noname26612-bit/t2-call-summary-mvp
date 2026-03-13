@@ -61,7 +61,14 @@ Source of truth for current YC deploy progress and fixed decisions:
   - [x] добавить `scripts/monitoring/baseline-check.sh`
   - [x] выкатить monitoring baseline на production VM
   - [x] пройти production verification (`healthz`, container health, baseline-check, short smoke)
-- [ ] 7. Перейти к staged t2 production ingest rollout (текущий активный этап)
+- [x] 7. Выполнить production ingest hardening для `POST /api/process-call`
+  - [x] optional ingress auth через `INGEST_SHARED_SECRET`
+  - [x] production verification: `401 / 400 / 200`
+  - [x] Telegram delivery подтверждена на accepted ingest проверке
+  - [x] ingest structured logs подтверждены, transcript в лог не течёт
+  - [x] main app image обновлён до `t2-call-summary:prod-v4-ingest-hardening-amd64`
+  - [x] `ai-gateway` не менялся (`ai-gateway:prod-v3-monitoring-amd64`)
+- [ ] 8. Next milestone: `t2` production ingest wiring / cutover preparation (текущий активный этап)
 
 ## Контрольные follow-up задачи
 
