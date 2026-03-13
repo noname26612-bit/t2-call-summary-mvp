@@ -83,7 +83,17 @@ Source of truth for current YC deploy progress and fixed decisions:
   - [x] 8.12 Добавить one-shot Tele2 polling command (`tele2:poll-once`) с durable dedup по `recordFileName` (без scheduler/worker)
   - [x] 8.13 Выкатить poll-once на VM и выполнить ручной dry-run + live run для новых записей
   - [x] 8.14 Перевести `ai-gateway /transcribe` на multipart upload и подтвердить long-audio E2E на production (бывший `413` кейс)
-  - [ ] 8.15 Выполнить операционный manual rollout `tele2:poll-once` (регулярный dry-run/live/dedup без cron/scheduler)
+  - [x] 8.15 Выполнить операционный manual rollout `tele2:poll-once` (регулярный dry-run/live/dedup без cron/scheduler)
+  - [x] 8.16 Подготовить production-safe scheduler assets для `tele2:poll-once`:
+    - [x] VM wrapper script с защитой от overlap (`flock`)
+    - [x] `systemd` one-shot service + timer templates
+    - [x] минимальный ops runbook (install/run/status/logs/stop/rollback)
+    - [x] safe starter defaults: `15m`, `lookback=60`, `maxCandidates=10`, `timeoutMs=180000`
+  - [ ] 8.17 Выполнить controlled VM rollout scheduler:
+    - [ ] установить `t2-tele2-poll.service` и `t2-tele2-poll.timer`
+    - [ ] проверить первый ручной service run
+    - [ ] проверить timer trigger и отсутствие overlap
+    - [ ] зафиксировать dry-run/live результат и dedup стабильность
 
 ## Контрольные follow-up задачи
 

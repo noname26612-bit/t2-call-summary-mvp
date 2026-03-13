@@ -1,0 +1,13 @@
+[Unit]
+Description=Run t2-tele2-poll.service every 15 minutes
+
+[Timer]
+OnBootSec=3m
+OnUnitActiveSec=15m
+AccuracySec=1m
+RandomizedDelaySec=30s
+Persistent=true
+Unit=t2-tele2-poll.service
+
+[Install]
+WantedBy=timers.target

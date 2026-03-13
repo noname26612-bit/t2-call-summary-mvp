@@ -1,0 +1,43 @@
+[Unit]
+Description=Tele2 poll-once (t2-call-summary-mvp)
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=artem266
+Group=artem266
+WorkingDirectory=/home/artem266/t2-call-summary-mvp
+TimeoutStartSec=0
+
+# Wrapper runtime defaults (safe first rollout profile).
+Environment=PROJECT_DIR=/home/artem266/t2-call-summary-mvp
+Environment=TELE2_POLL_MAIN_ENV_FILE=/opt/t2-call-summary/main.env
+Environment=TELE2_POLL_ENV_FILE=/opt/t2-call-summary/tele2-poll.env
+Environment=TELE2_POLL_DOCKER_NETWORK=t2-app-net
+Environment=TELE2_POLL_NODE_IMAGE=node:20-alpine
+Environment=TELE2_POLL_LOOKBACK_MINUTES=60
+Environment=TELE2_POLL_FETCH_LIMIT=30
+Environment=TELE2_POLL_MAX_CANDIDATES=10
+Environment=TELE2_POLL_MIN_AUDIO_BYTES=4096
+Environment=TELE2_POLL_TIMEOUT_MS=180000
+Environment=TELE2_POLL_DRY_RUN=false
+Environment=TELE2_POLL_RETRY_FAILED=true
+Environment=AI_GATEWAY_URL=http://ai-gateway:3001
+Environment=PROCESS_CALL_URL=http://t2-call-summary:3000/api/process-call
+Environment=AI_GATEWAY_TRANSCRIBE_PATH=/transcribe
+Environment=T2_AUTH_SCHEME=plain
+
+# Optional environment overrides for poll settings and Tele2 token.
+# Loaded after defaults, so values here can override the defaults above.
+EnvironmentFile=-/opt/t2-call-summary/tele2-poll.env
+
+ExecStart=/home/artem266/t2-call-summary-mvp/scripts/run-tele2-poll-once.sh
+
+# Keep logs in journal; wrapper also appends to TELE2_POLL_LOG_FILE.
+StandardOutput=journal
+StandardError=journal
+
+# Service is one-shot and should not auto-restart here.
+Restart=no

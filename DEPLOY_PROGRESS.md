@@ -135,11 +135,22 @@ These decisions are considered fixed unless explicitly changed:
     - Telegram delivery `sent`
   - previous JSON/base64 `413 PAYLOAD_TOO_LARGE` limitation for this long record is removed
   - operational fact: default timeout `20000 ms` can be insufficient for long records; successful long-record test used `--timeout-ms 180000`
+- safe STT candidate compare mode validated in production without changing default:
+  - `ai-gateway` updated to `ai-gateway:prod-v6-stt-compare-amd64`
+  - default model remains `openai/gpt-4o-mini-transcribe`
+  - candidate `openai/whisper-1` tested on sample and rejected for production switch (`success=0 / empty=8 / failed=2`)
+- scheduled poll-once ops assets prepared in repository (no webhook/cutover changes):
+  - VM wrapper with overlap lock: `scripts/run-tele2-poll-once.sh`
+  - systemd unit templates: `ops/systemd/t2-tele2-poll.service`, `ops/systemd/t2-tele2-poll.timer`
+  - optional VM env template: `ops/systemd/tele2-poll.env.example`
+  - safe starter profile fixed for timer rollout: interval 15m, lookback 60m, max candidates 10, timeout 180000 ms
+  - service timeout guard set (`TimeoutStartSec=0`) to avoid systemd killing long polling runs
+  - wrapper logs are JSON-lines with explicit exit code semantics (`0`, `2`, propagated poll exit code)
 
 ## Current production image tags (active)
 
 - main app: `t2-call-summary:prod-v5-tele2-adapter-amd64`
-- gateway: `ai-gateway:prod-v5-transcribe-multipart-amd64`
+- gateway: `ai-gateway:prod-v6-stt-compare-amd64`
 
 ## Current production routing note
 
@@ -159,7 +170,7 @@ Tele2 adapter is deployed to production with flag off and validated.
 Tele2 pull route (`call-records/info`, `call-records/file`) and manual STT bridge E2E are validated.
 Tele2 one-shot polling MVP is validated on VM (`dry-run`, `live-run`, `dedup`).
 Multipart transcription path for long audio is validated in production.
-Next narrow milestone: operational manual rollout of `tele2:poll-once` (manual dry-run/live/dedup cadence) before any scheduler/cutover automation.
+Next narrow milestone: enable scheduled `tele2:poll-once` on VM via systemd service/timer (with overlap lock and safe defaults), then verify dry-run/live cadence.
 
 ## Runtime naming status
 
@@ -176,16 +187,17 @@ Status:
 
 ## Next steps
 
-1. Rotate the exposed Polza API key if it has not already been rotated after local testing, then re-run a short production smoke.
-2. Continue manual `tele2:poll-once` operations on VM (`dry-run` -> `live-run` -> repeated dedup run) and collect stability data.
-3. Decide practical timeout defaults for long records (or document required CLI override) based on manual run stats.
+1. Install and enable `t2-tele2-poll.service` + `t2-tele2-poll.timer` on VM with safe starter profile (15m / 60m lookback / max 10 / 180000 ms timeout).
+2. Verify scheduler rollout on VM (`systemctl status`, `journalctl`, poll log file, dry-run/live behavior, dedup stability).
+3. Rotate the exposed Polza API key if it has not already been rotated after local testing, then re-run a short production smoke.
 4. Keep `TELE2_INGEST_ENABLED=false` until Tele2 webhook payload contract is confirmed and explicitly approved for controlled cutover.
-5. Keep lightweight monitoring checks running during poll-once operations and early ingest wiring.
+5. Keep lightweight monitoring checks running during scheduled poll-once operations.
 
 ## Open checks
 
 - verify request timeout and retries are acceptable for real call volume
 - confirm and document timeout policy for long records (`--timeout-ms 180000` validated for manual long-record run)
+- verify systemd timer overlap guard behavior (`flock`) under delayed/long runs
 - rotate exposed Polza API key and any exposed development credentials before full production traffic
 - verify final provider/model naming in runtime env and docs
 - confirm exact Tele2 payload contract (field locations + datetime format + transcript size)
