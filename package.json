@@ -7,7 +7,9 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "migrate": "node src/scripts/migrate.js",
-    "import:json": "node src/scripts/importJsonBootstrap.js"
+    "import:json": "node src/scripts/importJsonBootstrap.js",
+    "manual:tele2-record": "node src/scripts/processTele2RecordManual.js",
+    "tele2:poll-once": "node src/scripts/pollTele2RecordsOnce.js"
   },
   "keywords": [],
   "author": "",
