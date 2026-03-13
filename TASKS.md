@@ -80,6 +80,10 @@ Source of truth for current YC deploy progress and fixed decisions:
   - [ ] 8.9 Выполнить smoke checklist (dry-run + 1-2 реальных запроса)
   - [x] 8.10 Выполнить production verification checklist и зафиксировать результат в `DEPLOY_PROGRESS.md`
   - [ ] 8.11 Проверить rollback checklist в боевом runbook перед full cutover
+  - [x] 8.12 Добавить one-shot Tele2 polling command (`tele2:poll-once`) с durable dedup по `recordFileName` (без scheduler/worker)
+  - [x] 8.13 Выкатить poll-once на VM и выполнить ручной dry-run + live run для новых записей
+  - [x] 8.14 Перевести `ai-gateway /transcribe` на multipart upload и подтвердить long-audio E2E на production (бывший `413` кейс)
+  - [ ] 8.15 Выполнить операционный manual rollout `tele2:poll-once` (регулярный dry-run/live/dedup без cron/scheduler)
 
 ## Контрольные follow-up задачи
 
@@ -91,5 +95,6 @@ Source of truth for current YC deploy progress and fixed decisions:
 - [x] После Polza cutover: выполнить и подтвердить минимальный monitoring baseline для production VM
 - [x] Добавить минимальный monitoring/alerts (healthz, 5xx, Polza/Telegram failures, DB connectivity)
 - [ ] Добавить monitoring по gateway (401/400/502 rate, latency, timeout rate)
+- [ ] Зафиксировать рабочую timeout-политику для длинных записей (`--timeout-ms 180000` validated) и при необходимости обновить default values
 - [ ] Повысить приоритет retention policy для исторических таблиц PostgreSQL
 - [ ] Подготовить интеграцию Lockbox для секретов (вместо env-only)

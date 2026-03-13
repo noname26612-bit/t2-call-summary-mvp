@@ -118,11 +118,28 @@ These decisions are considered fixed unless explicitly changed:
     - `POST /api/process-call` returned HTTP 200 (`status=processed`)
     - `POST /api/ingest/tele2` returned HTTP 503 with `TELE2_INGEST_DISABLED`
   - `ai-gateway` runtime/container/image remained unchanged
+- production STT bridge validated via manual E2E:
+  - Tele2 `call-records/file` -> `ai-gateway /transcribe` -> Polza -> `/api/process-call` -> Telegram
+  - `openai/whisper-1` tested and not suitable for current recordings
+  - active validated STT model: `openai/gpt-4o-mini-transcribe`
+  - `ai-gateway` updated to image `ai-gateway:prod-v4-transcribe-amd64`
+- Tele2 one-shot polling MVP validated on VM:
+  - `tele2:poll-once` dry-run passed
+  - `tele2:poll-once` live-run passed
+  - durable dedup by `recordFileName` verified on repeated run
+- multipart large-audio STT path validated on production:
+  - `ai-gateway /transcribe` switched to multipart upload in image `ai-gateway:prod-v5-transcribe-multipart-amd64`
+  - `POST /transcribe` checks verified: `401` without secret, `400` with bad mime
+  - long Tele2 record `2026-03-13/177341088205035848` (3.6 MB) now transcribed and processed successfully:
+    - `processCall.statusCode=200`
+    - Telegram delivery `sent`
+  - previous JSON/base64 `413 PAYLOAD_TOO_LARGE` limitation for this long record is removed
+  - operational fact: default timeout `20000 ms` can be insufficient for long records; successful long-record test used `--timeout-ms 180000`
 
 ## Current production image tags (active)
 
 - main app: `t2-call-summary:prod-v5-tele2-adapter-amd64`
-- gateway: `ai-gateway:prod-v3-monitoring-amd64`
+- gateway: `ai-gateway:prod-v5-transcribe-multipart-amd64`
 
 ## Current production routing note
 
@@ -139,7 +156,10 @@ Infrastructure/monitoring baseline phase is completed and validated on the curre
 Ingest hardening rollout for `POST /api/process-call` is completed and validated in production.
 Tele2 adapter/integration prep is implemented in code with rollback-safe switches.
 Tele2 adapter is deployed to production with flag off and validated.
-Next real milestone: obtain real Tele2 payload, confirm field paths, and run controlled dry-run checks before live switch.
+Tele2 pull route (`call-records/info`, `call-records/file`) and manual STT bridge E2E are validated.
+Tele2 one-shot polling MVP is validated on VM (`dry-run`, `live-run`, `dedup`).
+Multipart transcription path for long audio is validated in production.
+Next narrow milestone: operational manual rollout of `tele2:poll-once` (manual dry-run/live/dedup cadence) before any scheduler/cutover automation.
 
 ## Runtime naming status
 
@@ -157,14 +177,15 @@ Status:
 ## Next steps
 
 1. Rotate the exposed Polza API key if it has not already been rotated after local testing, then re-run a short production smoke.
-2. Obtain real Tele2 payload samples and confirm field paths/auth details.
-3. Fill `TELE2_*_FIELD_PATH` values and run controlled dry-run checks through `POST /api/ingest/tele2`.
-4. Keep `TELE2_INGEST_ENABLED=false` until dry-run results are stable and explicitly approved.
-5. Keep lightweight monitoring checks running during ingest wiring and early live traffic.
+2. Continue manual `tele2:poll-once` operations on VM (`dry-run` -> `live-run` -> repeated dedup run) and collect stability data.
+3. Decide practical timeout defaults for long records (or document required CLI override) based on manual run stats.
+4. Keep `TELE2_INGEST_ENABLED=false` until Tele2 webhook payload contract is confirmed and explicitly approved for controlled cutover.
+5. Keep lightweight monitoring checks running during poll-once operations and early ingest wiring.
 
 ## Open checks
 
 - verify request timeout and retries are acceptable for real call volume
+- confirm and document timeout policy for long records (`--timeout-ms 180000` validated for manual long-record run)
 - rotate exposed Polza API key and any exposed development credentials before full production traffic
 - verify final provider/model naming in runtime env and docs
 - confirm exact Tele2 payload contract (field locations + datetime format + transcript size)
