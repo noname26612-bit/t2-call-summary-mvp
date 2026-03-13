@@ -78,6 +78,20 @@ These decisions are considered fixed unless explicitly changed:
   - Docker `HEALTHCHECK` in main app and `ai-gateway` images
   - lightweight script `scripts/monitoring/baseline-check.sh`
   - beginner-friendly runbook `MONITORING_BASELINE.md`
+- monitoring baseline successfully rolled out on the production VM
+- production verification passed after monitoring rollout:
+  - container health OK
+  - `/healthz` endpoints OK
+  - `baseline-check.sh` exit code `0`
+  - short production smoke: HTTP 200, `status=processed`, `telegram.status=sent`
+- operational lesson confirmed:
+  - production VM architecture = `amd64`
+  - production image builds must explicitly target `linux/amd64`
+
+## Current production image tags (active)
+
+- main app: `t2-call-summary:prod-v3-monitoring-amd64`
+- gateway: `ai-gateway:prod-v3-monitoring-amd64`
 
 ## Current production routing note
 
@@ -90,7 +104,8 @@ For the current production baseline on the existing Yandex VM:
 
 ## Current active checkpoint
 
-Light post-cutover hardening and monitoring baseline are documented and ready for use on the current VM baseline.
+Infrastructure/monitoring baseline phase is completed and validated on the current production VM baseline.
+Next active stage: narrow and safe `t2` production ingest rollout.
 
 ## Runtime naming status
 
@@ -108,8 +123,8 @@ Status:
 ## Next steps
 
 1. Rotate the exposed Polza API key if it has not already been rotated after local testing, then re-run a short production smoke.
-2. Observe real peak load / latency / failures using the lightweight monitoring baseline before any topology changes.
-3. Only after stable post-cutover monitoring, return to deeper `t2` production ingest work.
+2. Start staged `t2` production ingest rollout with minimal scope and rollback safety.
+3. Keep lightweight monitoring checks running during ingest rollout and early live traffic.
 
 ## Open checks
 
@@ -122,7 +137,6 @@ Status:
 - moving PostgreSQL out of current setup
 - moving main app off current Yandex VM
 - deploying a separate gateway VM in another region only to bypass region limits
-- t2 production ingest deepening
 - Redis / queues / workers
 - Kubernetes
 - load balancer

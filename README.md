@@ -20,6 +20,8 @@ Production Polza cutover на existing Yandex VM завершён и подтв�
 - direct OpenAI runtime path больше не является активным production route
 - external EU/VPS gateway host не используется
 - naming cleanup for `ai-gateway` env completed (`AI_GATEWAY_SHARED_SECRET`, `POLZA_*`)
+- lightweight monitoring baseline выкачен на production VM и production verification успешно пройдена
+- следующий этап: staged `t2` production ingest rollout
 
 ## Текущая архитектура
 
@@ -204,10 +206,13 @@ Current confirmed production baseline:
 - Telegram integration unchanged
 - old direct OpenAI path is not the active production runtime route
 - external EU/VPS gateway host is not used
+- active production image tags:
+  - `t2-call-summary:prod-v3-monitoring-amd64`
+  - `ai-gateway:prod-v3-monitoring-amd64`
 
 Current next follow-ups:
 - rotate the exposed Polza API key if it has not already been rotated after local testing
-- monitor real peak load / latency / failures before any topology changes
+- start staged `t2` production ingest rollout with rollback safety
 
 Important:
 - production Polza cutover на existing Yandex VM уже подтверждён
@@ -215,7 +220,7 @@ Important:
 
 ## Minimal monitoring baseline
 
-For the current single-VM + Docker production baseline, lightweight monitoring is now documented and ready:
+For the current single-VM + Docker production baseline, lightweight monitoring is implemented, deployed, and validated:
 
 - Docker image-level `HEALTHCHECK` for main app and `ai-gateway`
 - `/healthz` checks from VM

@@ -56,7 +56,12 @@ Source of truth for current YC deploy progress and fixed decisions:
     - main app -> ai-gateway -> Polza -> PostgreSQL -> Telegram
   - [x] подтвердить, что old direct OpenAI path remains disabled in production runtime
   - [x] синхронизировать docs после успешного production cutover
-- [ ] 6. После стабилизации production routing вернуться к t2 production ingest
+- [x] 6. Завершить infrastructure/monitoring baseline phase на production VM
+  - [x] добавить Docker `HEALTHCHECK` для main app и `ai-gateway`
+  - [x] добавить `scripts/monitoring/baseline-check.sh`
+  - [x] выкатить monitoring baseline на production VM
+  - [x] пройти production verification (`healthz`, container health, baseline-check, short smoke)
+- [ ] 7. Перейти к staged t2 production ingest rollout (текущий активный этап)
 
 ## Контрольные follow-up задачи
 
@@ -65,7 +70,7 @@ Source of truth for current YC deploy progress and fixed decisions:
 - [x] После успешного production Polza cutover выполнить naming cleanup:
   - `GATEWAY_SHARED_SECRET -> AI_GATEWAY_SHARED_SECRET`
   - `OPENAI_* -> POLZA_*`
-- [ ] После Polza cutover: мониторить реальный peak load / latency / failures до любых topology changes
+- [x] После Polza cutover: выполнить и подтвердить минимальный monitoring baseline для production VM
 - [x] Добавить минимальный monitoring/alerts (healthz, 5xx, Polza/Telegram failures, DB connectivity)
 - [ ] Добавить monitoring по gateway (401/400/502 rate, latency, timeout rate)
 - [ ] Повысить приоритет retention policy для исторических таблиц PostgreSQL
