@@ -2,7 +2,7 @@
 
 ## Project stage
 
-Current stage: production routing cutover completed with Polza as the fixed long-term AI strategy.
+Current stage: post-cutover hardening for the confirmed production baseline (lightweight monitoring baseline added).
 
 Target runtime:
 
@@ -20,7 +20,7 @@ Primary priority is **stable production routing**, not feature expansion:
 2. preserve Telegram delivery path
 3. keep the confirmed production route stable via `ai-gateway` and Polza
 4. sync docs with the confirmed production baseline on the existing Yandex VM
-5. only after docs sync and naming cleanup return to deepening t2 production ingest
+5. complete monitoring rollout/verification on VM, then return to deepening t2 production ingest
 
 ## Polza integration discipline
 
@@ -54,6 +54,9 @@ Rules:
 For the current production baseline on the existing Yandex VM:
 
 - main app and `ai-gateway` run as separate Docker containers on the same VM
+- canonical container names:
+  - main app: `t2-call-summary`
+  - gateway: `ai-gateway`
 - container-to-container routing uses Docker network `t2-app-net`
 - production `AI_GATEWAY_URL` must be `http://ai-gateway:3001`
 - `127.0.0.1:3001` is acceptable only for host-level checks from the VM, not as the main app container runtime URL
@@ -73,29 +76,21 @@ Success criteria for this phase:
 Current status:
 
 - these criteria are now confirmed for the existing Yandex VM baseline
-- naming cleanup remains a separate follow-up task
+- runtime naming cleanup is complete (`AI_GATEWAY_SHARED_SECRET`, `POLZA_*`)
+- lightweight monitoring baseline is added (Docker `HEALTHCHECK` + log-based baseline checks)
 
-## Runtime naming discipline (current vs target)
+## Runtime naming discipline (canonical, implemented)
 
-Current runtime names (today, before separate code cutover):
+Canonical runtime names in code:
 
 - main app secret var: `AI_GATEWAY_SHARED_SECRET`
-- `ai-gateway` secret var in code: `GATEWAY_SHARED_SECRET`
-- provider vars in `ai-gateway` code: `OPENAI_*`
-
-Target names (after separate technical code cutover):
-
-- unify secret naming: `GATEWAY_SHARED_SECRET -> AI_GATEWAY_SHARED_SECRET`
-- unify provider naming: `OPENAI_* -> POLZA_*`
-
-Status rule:
-
-- do not present target naming as already implemented until code cutover is actually complete and smoke-verified
+- `ai-gateway` secret var: `AI_GATEWAY_SHARED_SECRET`
+- provider vars in `ai-gateway`: `POLZA_API_KEY`, `POLZA_BASE_URL`, `POLZA_MODEL`, `POLZA_TIMEOUT_MS`
 
 ## t2 integration scope
 
 - `/dev/t2-ingest` is still scaffold/debug
-- do not deepen real t2 production ingest in this phase unless explicitly requested
+- after monitoring rollout is verified on VM, next major step is deepening real t2 production ingest
 
 ## Storage rule
 

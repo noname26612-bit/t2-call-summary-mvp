@@ -74,6 +74,10 @@ These decisions are considered fixed unless explicitly changed:
 - product decision fixed:
   - no separate gateway VM in another region
   - Polza is the long-term upstream provider
+- minimal post-cutover monitoring baseline added:
+  - Docker `HEALTHCHECK` in main app and `ai-gateway` images
+  - lightweight script `scripts/monitoring/baseline-check.sh`
+  - beginner-friendly runbook `MONITORING_BASELINE.md`
 
 ## Current production routing note
 
@@ -86,7 +90,7 @@ For the current production baseline on the existing Yandex VM:
 
 ## Current active checkpoint
 
-Docs sync after successful production cutover and naming cleanup, followed by light post-cutover hardening.
+Light post-cutover hardening and monitoring baseline are documented and ready for use on the current VM baseline.
 
 ## Runtime naming status
 
@@ -104,7 +108,7 @@ Status:
 ## Next steps
 
 1. Rotate the exposed Polza API key if it has not already been rotated after local testing, then re-run a short production smoke.
-2. Add minimal monitoring for healthz, 5xx, Polza failures, Telegram failures, and DB connectivity.
+2. Observe real peak load / latency / failures using the lightweight monitoring baseline before any topology changes.
 3. Only after stable post-cutover monitoring, return to deeper `t2` production ingest work.
 
 ## Open checks

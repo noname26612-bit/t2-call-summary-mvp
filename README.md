@@ -190,6 +190,9 @@ Current stable local proof:
 
 Current confirmed production baseline:
 - main app и `ai-gateway` работают как отдельные Docker containers на одной existing Yandex VM
+- canonical production container names:
+  - main app: `t2-call-summary`
+  - gateway: `ai-gateway`
 - runtime container-to-container routing uses `t2-app-net`
 - production main app uses `AI_GATEWAY_URL=http://ai-gateway:3001`
 - `ai-gateway /healthz` на VM = ok
@@ -203,13 +206,28 @@ Current confirmed production baseline:
 - external EU/VPS gateway host is not used
 
 Current next follow-ups:
-- docs sync after successful production cutover
 - rotate the exposed Polza API key if it has not already been rotated after local testing
-- add lightweight monitoring after docs sync
+- monitor real peak load / latency / failures before any topology changes
 
 Important:
 - production Polza cutover на existing Yandex VM уже подтверждён
 - production runtime naming в `ai-gateway` использует `AI_GATEWAY_SHARED_SECRET` и `POLZA_*`
+
+## Minimal monitoring baseline
+
+For the current single-VM + Docker production baseline, lightweight monitoring is now documented and ready:
+
+- Docker image-level `HEALTHCHECK` for main app and `ai-gateway`
+- `/healthz` checks from VM
+- log-based failure visibility for:
+  - main app 5xx/crash
+  - ai-gateway failures
+  - Polza upstream failures
+  - Telegram delivery failures
+  - DB connectivity failures
+- one command script: `scripts/monitoring/baseline-check.sh`
+
+Runbook: `MONITORING_BASELINE.md`
 
 ## Execution note
 
@@ -247,13 +265,13 @@ curl -s http://127.0.0.1:3000/healthz
 Сборка:
 
 ```bash
-docker build -t t2-call-summary-mvp:latest .
+docker build -t t2-call-summary:latest .
 ```
 
 Запуск:
 
 ```bash
-docker run --rm -p 3000:3000 --env-file .env t2-call-summary-mvp:latest
+docker run --rm -p 3000:3000 --env-file .env t2-call-summary:latest
 ```
 
 `docker-entrypoint.sh` сначала запускает миграции, затем стартует сервис.
@@ -261,4 +279,5 @@ docker run --rm -p 3000:3000 --env-file .env t2-call-summary-mvp:latest
 ## Yandex Cloud deploy notes
 
 Короткий пошаговый deploy guide: `DEPLOYMENT_YC.md`.
+Monitoring/hardening runbook for the same baseline: `MONITORING_BASELINE.md`.
 Локальный проверочный сценарий: `SMOKE_TEST.md`.

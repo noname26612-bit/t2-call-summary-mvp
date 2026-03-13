@@ -66,7 +66,7 @@ Source of truth for current YC deploy progress and fixed decisions:
   - `GATEWAY_SHARED_SECRET -> AI_GATEWAY_SHARED_SECRET`
   - `OPENAI_* -> POLZA_*`
 - [ ] После Polza cutover: мониторить реальный peak load / latency / failures до любых topology changes
-- [ ] Добавить минимальный monitoring/alerts (healthz, 5xx, Polza/Telegram failures, DB connectivity)
+- [x] Добавить минимальный monitoring/alerts (healthz, 5xx, Polza/Telegram failures, DB connectivity)
 - [ ] Добавить monitoring по gateway (401/400/502 rate, latency, timeout rate)
 - [ ] Повысить приоритет retention policy для исторических таблиц PostgreSQL
 - [ ] Подготовить интеграцию Lockbox для секретов (вместо env-only)

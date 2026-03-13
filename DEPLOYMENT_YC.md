@@ -128,15 +128,15 @@ VM должна запускать фиксированные теги из Regi
 
 ### Where to run
 Локальный терминал:
-`/Users/nonamenoname/Documents/Транскрибация/t2-call-summary-mvp`
+`<repo-root>`
 
 ### Exact command
 ```bash
-cd /Users/nonamenoname/Documents/Транскрибация/t2-call-summary-mvp
+cd <repo-root>
 export REGISTRY_ID="<ваш-registry-id>"
 
 # main app
-export APP_IMAGE="cr.yandex/${REGISTRY_ID}/t2-call-summary-mvp:prod-v2"
+export APP_IMAGE="cr.yandex/${REGISTRY_ID}/t2-call-summary:prod-v2"
 docker build -t "${APP_IMAGE}" .
 docker push "${APP_IMAGE}"
 
@@ -243,7 +243,7 @@ SSH-сессия на VM.
 ### Exact command
 ```bash
 export REGISTRY_ID="<ваш-registry-id>"
-export APP_IMAGE="cr.yandex/${REGISTRY_ID}/t2-call-summary-mvp:prod-v2"
+export APP_IMAGE="cr.yandex/${REGISTRY_ID}/t2-call-summary:prod-v2"
 export GATEWAY_IMAGE="cr.yandex/${REGISTRY_ID}/ai-gateway:prod-v2"
 
 docker pull "${APP_IMAGE}"
@@ -252,7 +252,7 @@ docker pull "${GATEWAY_IMAGE}"
 docker network inspect t2-app-net >/dev/null 2>&1 || docker network create t2-app-net
 
 docker rm -f ai-gateway || true
-docker rm -f t2-call-summary-mvp || true
+docker rm -f t2-call-summary || true
 
 docker run -d \
   --name ai-gateway \
@@ -263,7 +263,7 @@ docker run -d \
   "${GATEWAY_IMAGE}"
 
 docker run -d \
-  --name t2-call-summary-mvp \
+  --name t2-call-summary \
   --restart unless-stopped \
   --network t2-app-net \
   -p 3000:3000 \
@@ -276,7 +276,7 @@ docker run -d \
 
 ### How to verify
 ```bash
-docker ps --filter "name=ai-gateway" --filter "name=t2-call-summary-mvp"
+docker ps --filter "name=ai-gateway" --filter "name=t2-call-summary"
 docker network inspect t2-app-net
 ```
 
@@ -339,7 +339,7 @@ HTTP 200 и ожидаемый `status` (`processed`/`ignored`/`duplicate`).
 Проверьте HTTP-ответ + логи контейнеров:
 ```bash
 docker logs --tail 200 ai-gateway
-docker logs --tail 200 t2-call-summary-mvp
+docker logs --tail 200 t2-call-summary
 ```
 
 ### If the result is different
@@ -400,3 +400,93 @@ SELECT COUNT(*) AS deliveries_count FROM telegram_deliveries;
 
 ### If the result is different
 Исправьте рассинхрон перед следующим deploy-шагом.
+
+## Step 10. Minimal monitoring / post-cutover hardening
+
+### What we are doing
+Добавляем и проверяем минимальный monitoring слой для текущего production baseline без изменения архитектуры.
+
+### Why we are doing it
+После cutover нужен простой и стабильный способ видеть проблемы по `healthz`, 5xx, gateway/provider, Telegram и DB.
+
+### Where to run
+1) Локальный терминал (build/push обновлённых images)  
+2) SSH на VM (pull/restart/verify)
+
+### Exact command
+Локально:
+```bash
+cd <repo-root>
+
+export REGISTRY_ID="<ваш-registry-id>"
+export APP_IMAGE="cr.yandex/${REGISTRY_ID}/t2-call-summary:prod-v3-monitoring"
+export GATEWAY_IMAGE="cr.yandex/${REGISTRY_ID}/ai-gateway:prod-v3-monitoring"
+
+docker build -t "${APP_IMAGE}" .
+docker push "${APP_IMAGE}"
+
+docker build -t "${GATEWAY_IMAGE}" ./ai-gateway
+docker push "${GATEWAY_IMAGE}"
+
+scp <repo-root>/scripts/monitoring/baseline-check.sh <vm-user>@<VM_PUBLIC_IP>:/tmp/baseline-check.sh
+```
+
+На VM:
+```bash
+export REGISTRY_ID="<ваш-registry-id>"
+export APP_IMAGE="cr.yandex/${REGISTRY_ID}/t2-call-summary:prod-v3-monitoring"
+export GATEWAY_IMAGE="cr.yandex/${REGISTRY_ID}/ai-gateway:prod-v3-monitoring"
+
+docker pull "${APP_IMAGE}"
+docker pull "${GATEWAY_IMAGE}"
+
+docker rm -f ai-gateway || true
+docker rm -f t2-call-summary || true
+
+docker run -d \
+  --name ai-gateway \
+  --restart unless-stopped \
+  --network t2-app-net \
+  -p 3001:3001 \
+  --env-file /opt/t2-call-summary/gateway.env \
+  "${GATEWAY_IMAGE}"
+
+docker run -d \
+  --name t2-call-summary \
+  --restart unless-stopped \
+  --network t2-app-net \
+  -p 3000:3000 \
+  --env-file /opt/t2-call-summary/main.env \
+  "${APP_IMAGE}"
+
+docker ps --format "table {{.Names}}\t{{.Status}}"
+docker inspect --format '{{.Name}} -> {{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' ai-gateway t2-call-summary
+
+curl -s http://127.0.0.1:3001/healthz
+curl -s http://127.0.0.1:3000/healthz
+
+sudo install -m 755 /tmp/baseline-check.sh /opt/t2-call-summary/baseline-check.sh
+LOG_WINDOW=15m /opt/t2-call-summary/baseline-check.sh
+```
+
+### Expected result
+- `docker inspect` показывает `healthy` у обоих контейнеров (после короткого start period)
+- health endpoints возвращают OK
+- `baseline-check.sh` возвращает `[OK]` или `[ATTENTION]` с понятными log signals
+
+### How to verify
+Если есть `[ATTENTION]`/`[FAIL]`, открыть последние логи:
+```bash
+docker logs --since 15m --tail 200 ai-gateway
+docker logs --since 15m --tail 200 t2-call-summary
+```
+
+### If the result is different
+Сначала восстановить контейнеры и `healthz`, затем разбирать сигналы:
+- `main app 5xx / crash`
+- `ai-gateway failures`
+- `Polza upstream failures`
+- `Telegram delivery failures`
+- `DB connectivity failures`
+
+Подробный runbook: `MONITORING_BASELINE.md`.
