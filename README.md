@@ -251,7 +251,11 @@ cd /home/artem266/t2-call-summary-mvp
 
 sudo cp ops/systemd/t2-tele2-poll.service /etc/systemd/system/
 sudo cp ops/systemd/t2-tele2-poll.timer /etc/systemd/system/
-sudo cp ops/systemd/tele2-poll.env.example /opt/t2-call-summary/tele2-poll.env
+
+# Create tele2-poll.env only once (do not overwrite a live configured file).
+if [ ! -f /opt/t2-call-summary/tele2-poll.env ]; then
+  sudo install -m 0640 ops/systemd/tele2-poll.env.example /opt/t2-call-summary/tele2-poll.env
+fi
 
 sudoedit /opt/t2-call-summary/tele2-poll.env
 # Required:
