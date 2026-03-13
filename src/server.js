@@ -42,6 +42,33 @@ function isIngestAuthorized(req, ingressSharedSecret) {
   return isNonEmptyString(providedSecret) && providedSecret === ingressSharedSecret;
 }
 
+function isDryRunEnabled(req) {
+  const queryValue = req?.query?.dryRun;
+  const headerValue = req.get('x-ingest-dry-run');
+  const raw = isNonEmptyString(headerValue)
+    ? headerValue
+    : (typeof queryValue === 'string' ? queryValue : (queryValue === true ? 'true' : ''));
+
+  if (!isNonEmptyString(raw)) {
+    return false;
+  }
+
+  const normalized = raw.trim().toLowerCase();
+  return ['1', 'true', 'yes', 'on'].includes(normalized);
+}
+
+function getTopLevelPayloadKeys(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return [];
+  }
+
+  return Object.keys(payload).sort();
+}
+
+function isTele2IngestMisconfigured({ tele2IngestEnabled, ingestSharedSecret }) {
+  return tele2IngestEnabled === true && !isNonEmptyString(ingestSharedSecret);
+}
+
 function sendKnownError(res, error, logger, context) {
   if (error && Number.isInteger(error.statusCode)) {
     logger.warn('request_failed_known_error', {
@@ -69,13 +96,25 @@ function createApp({
   processCall,
   ingestT2Call,
   appTimezone,
-  ingestSharedSecret
+  ingestSharedSecret,
+  tele2IngestEnabled
 }) {
   const app = express();
+  const tele2Misconfigured = isTele2IngestMisconfigured({
+    tele2IngestEnabled,
+    ingestSharedSecret
+  });
 
   app.disable('x-powered-by');
   app.use(express.json({ limit: '1mb' }));
   app.use(createRequestLoggerMiddleware(logger));
+
+  if (tele2Misconfigured) {
+    logger.error('tele2_ingest_misconfigured', {
+      route: '/api/ingest/tele2',
+      reason: 'TELE2_INGEST_ENABLED=true but INGEST_SHARED_SECRET is empty'
+    });
+  }
 
   app.get('/health', async (req, res) => {
     try {
@@ -123,9 +162,12 @@ function createApp({
   });
 
   app.post('/dev/t2-ingest', async (req, res) => {
+    const dryRun = isDryRunEnabled(req);
+
     try {
       const response = await ingestT2Call(req.body || {}, {
-        requestId: req.requestId
+        requestId: req.requestId,
+        dryRun
       });
 
       if (response && response.status === 'invalid_t2_payload') {
@@ -135,6 +177,75 @@ function createApp({
       return res.status(200).json(response);
     } catch (error) {
       return sendKnownError(res, error, logger, 'dev_t2_ingest');
+    }
+  });
+
+  app.post('/api/ingest/tele2', async (req, res) => {
+    const payload = req.body || {};
+    const dryRun = isDryRunEnabled(req);
+    const topLevelKeys = getTopLevelPayloadKeys(payload);
+
+    if (tele2Misconfigured) {
+      logger.error('tele2_ingest_request_blocked_misconfigured', {
+        requestId: req.requestId,
+        route: '/api/ingest/tele2'
+      });
+
+      return res.status(503).json({
+        error: 'Tele2 ingest is misconfigured',
+        code: 'TELE2_INGEST_MISCONFIGURED',
+        message: 'Set non-empty INGEST_SHARED_SECRET when TELE2_INGEST_ENABLED=true'
+      });
+    }
+
+    if (!isIngestAuthorized(req, ingestSharedSecret)) {
+      logger.warn('tele2_ingest_auth_rejected', {
+        requestId: req.requestId,
+        route: '/api/ingest/tele2',
+        hasSecretHeader: isNonEmptyString(req.get('x-ingest-secret'))
+      });
+
+      return res.status(401).json({
+        error: 'Unauthorized ingest request',
+        code: 'INGEST_UNAUTHORIZED'
+      });
+    }
+
+    if (!tele2IngestEnabled) {
+      logger.warn('tele2_ingest_disabled', {
+        requestId: req.requestId,
+        route: '/api/ingest/tele2',
+        dryRun
+      });
+
+      return res.status(503).json({
+        error: 'Tele2 ingest is disabled',
+        code: 'TELE2_INGEST_DISABLED',
+        message: 'Set TELE2_INGEST_ENABLED=true to enable this endpoint'
+      });
+    }
+
+    logger.info('tele2_ingest_request_received', {
+      requestId: req.requestId,
+      route: '/api/ingest/tele2',
+      dryRun,
+      topLevelKeyCount: topLevelKeys.length,
+      topLevelKeysSample: topLevelKeys.slice(0, 20)
+    });
+
+    try {
+      const response = await ingestT2Call(payload, {
+        requestId: req.requestId,
+        dryRun
+      });
+
+      if (response && response.status === 'invalid_t2_payload') {
+        return res.status(400).json(response);
+      }
+
+      return res.status(200).json(response);
+    } catch (error) {
+      return sendKnownError(res, error, logger, 'api_tele2_ingest');
     }
   });
 
@@ -311,7 +422,11 @@ async function bootstrap() {
     logger: logger.child({ component: 'call_processor' })
   });
 
-  const { ingestT2Call } = createT2IngestService({ processCall });
+  const { ingestT2Call } = createT2IngestService({
+    processCall,
+    adapterConfig: config.t2.adapter,
+    logger: logger.child({ component: 't2_ingest' })
+  });
 
   const app = createApp({
     logger,
@@ -319,7 +434,8 @@ async function bootstrap() {
     processCall,
     ingestT2Call,
     appTimezone: config.appTimezone,
-    ingestSharedSecret: config.ingest.sharedSecret
+    ingestSharedSecret: config.ingest.sharedSecret,
+    tele2IngestEnabled: config.t2.ingestEnabled
   });
 
   const server = app.listen(config.port, () => {
