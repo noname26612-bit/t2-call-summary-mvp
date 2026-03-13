@@ -30,7 +30,7 @@ Source of truth for current YC deploy progress and fixed decisions:
   - [x] verify `/healthz` in cloud
   - [x] run first production smoke test
 - [x] 4. Сделать первый production deploy
-- [ ] 5. Перевести AI upstream на Polza и стабилизировать production routing (активный этап)
+- [x] 5. Перевести AI upstream на Polza и стабилизировать production routing
   - [x] зафиксировать baseline status в `DEPLOY_PROGRESS.md`
   - [x] создать каркас сервиса `ai-gateway/`
   - [x] переключить main app runtime wiring на `AI_GATEWAY_URL`
@@ -41,23 +41,27 @@ Source of truth for current YC deploy progress and fixed decisions:
   - [x] подтвердить прямую API-доступность Polza
   - [x] подтвердить локальный end-to-end именно через Polza:
     - main app -> ai-gateway -> Polza -> PostgreSQL -> Telegram
-  - [ ] ротировать засвеченный Polza API key после локального теста
-  - [ ] зафиксировать Polza как основной upstream provider в runtime code path
-  - [ ] адаптировать production env на существующей Yandex VM:
+  - [x] зафиксировать Polza как основной upstream provider в runtime code path
+  - [x] адаптировать production env на существующей Yandex VM:
     - `main.env`
     - `gateway.env`
-  - [ ] собрать и запушить production image для `ai-gateway`
-  - [ ] задеплоить `ai-gateway` на existing Yandex VM без отдельной gateway VM в другом регионе
-  - [ ] проверить `GET /healthz` main app на VM
-  - [ ] проверить `GET /healthz` ai-gateway на VM
-  - [ ] сделать production end-to-end smoke:
+  - [x] production container-to-container routing uses:
+    - Docker network `t2-app-net`
+    - `AI_GATEWAY_URL=http://ai-gateway:3001`
+  - [x] собрать и запушить production image для `ai-gateway`
+  - [x] задеплоить `ai-gateway` на existing Yandex VM без отдельной gateway VM в другом регионе
+  - [x] проверить `GET /healthz` main app на VM
+  - [x] проверить `GET /healthz` ai-gateway на VM
+  - [x] сделать production end-to-end smoke:
     - main app -> ai-gateway -> Polza -> PostgreSQL -> Telegram
-  - [ ] подтвердить, что old direct OpenAI path remains disabled in production runtime
+  - [x] подтвердить, что old direct OpenAI path remains disabled in production runtime
+  - [x] синхронизировать docs после успешного production cutover
 - [ ] 6. После стабилизации production routing вернуться к t2 production ingest
 
 ## Контрольные follow-up задачи
 
 - [x] Синхронизировать category enum в коде с бизнес-категориями (продажа/сервис/запчасти/аренда/спам/прочее)
+- [ ] Если Polza API key после локального теста ещё не ротирован, сделать rotation и повторить короткий production smoke
 - [ ] После успешного production Polza cutover выполнить naming cleanup:
   - `GATEWAY_SHARED_SECRET -> AI_GATEWAY_SHARED_SECRET`
   - `OPENAI_* -> POLZA_*`

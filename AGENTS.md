@@ -2,7 +2,7 @@
 
 ## Project stage
 
-Current stage: production routing cutover in progress with Polza as the fixed long-term AI strategy.
+Current stage: production routing cutover completed with Polza as the fixed long-term AI strategy.
 
 Target runtime:
 
@@ -18,9 +18,9 @@ Primary priority is **stable production routing**, not feature expansion:
 
 1. preserve the working PostgreSQL-based runtime storage
 2. preserve Telegram delivery path
-3. complete AI upstream cutover to Polza via `ai-gateway`
-4. deploy the resulting runtime on the existing Yandex VM without architecture expansion
-5. only after that return to deepening t2 production ingest
+3. keep the confirmed production route stable via `ai-gateway` and Polza
+4. sync docs with the confirmed production baseline on the existing Yandex VM
+5. only after docs sync and naming cleanup return to deepening t2 production ingest
 
 ## Polza integration discipline
 
@@ -49,6 +49,15 @@ Rules:
   2. sync `TASKS.md` if milestone state changed
   3. sync `README.md` only if project-wide runtime status changed
 
+## Current production routing note
+
+For the current production baseline on the existing Yandex VM:
+
+- main app and `ai-gateway` run as separate Docker containers on the same VM
+- container-to-container routing uses Docker network `t2-app-net`
+- production `AI_GATEWAY_URL` must be `http://ai-gateway:3001`
+- `127.0.0.1:3001` is acceptable only for host-level checks from the VM, not as the main app container runtime URL
+
 Success criteria for this phase:
 
 - `ai-gateway` successfully calls Polza in runtime
@@ -60,6 +69,11 @@ Success criteria for this phase:
   - PostgreSQL write path
   - Telegram delivery path
 - production runtime no longer depends on direct OpenAI access from Yandex region
+
+Current status:
+
+- these criteria are now confirmed for the existing Yandex VM baseline
+- naming cleanup remains a separate follow-up task
 
 ## Runtime naming discipline (current vs target)
 

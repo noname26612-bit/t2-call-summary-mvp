@@ -1,13 +1,15 @@
 # DEPLOY_PROGRESS.md
 
-Operational progress log for the current Yandex Cloud phase and the Polza production cutover.
+Operational progress log for the current Yandex Cloud phase after the successful Polza production cutover.
 
 ## Goal of current phase
 
-Keep the existing production baseline and stabilize production routing around Polza:
+Keep the existing production baseline stable after the confirmed Polza cutover:
 
-- keep main app on Yandex VM
-- keep PostgreSQL and current deploy unchanged
+- keep main app on the existing Yandex VM
+- keep main app and `ai-gateway` as separate Docker containers on the same VM
+- keep container-to-container routing on user-defined Docker network `t2-app-net`
+- keep PostgreSQL topology unchanged
 - keep Telegram integration unchanged
 - keep `ai-gateway` as the active runtime boundary
 - use Polza as upstream provider
@@ -29,6 +31,9 @@ These decisions are considered fixed unless explicitly changed:
 - current deploy style: fully manual, beginner-friendly, one small verified step at a time
 - current fixed AI strategy: **Polza as long-term upstream provider**
 - `ai-gateway` remains in architecture as thin internal adapter
+- current production main app gateway URL: `http://ai-gateway:3001`
+- host-level VM health check for gateway: `http://127.0.0.1:3001/healthz`
+- `ai-gateway` is not used as a separate public service
 
 ## Already completed
 
@@ -49,19 +54,39 @@ These decisions are considered fixed unless explicitly changed:
   - main app -> ai-gateway -> Polza -> PostgreSQL -> Telegram
 - confirmed local routing value for main app -> ai-gateway:
   - `AI_GATEWAY_URL=http://127.0.0.1:3001`
+- `ai-gateway` deployed on the existing Yandex VM
+- main app and `ai-gateway` are running as separate Docker containers on the same existing Yandex VM
+- production runtime traffic between containers uses Docker network `t2-app-net`
+- production main app uses:
+  - `AI_GATEWAY_URL=http://ai-gateway:3001`
+- host-level health checks confirmed on VM:
+  - `curl http://127.0.0.1:3001/healthz` -> ok
+  - `curl http://127.0.0.1:3000/healthz` -> ok
+- production end-to-end smoke confirmed:
+  - main app -> ai-gateway -> Polza -> PostgreSQL -> Telegram
+- `POST /api/process-call` on VM returned `processed`
+- `ai-gateway` logs confirmed successful `POST /analyze` through Polza
+- Telegram delivery status in production smoke: `sent`
+- old direct OpenAI path is no longer the active production runtime route
+- external EU/VPS gateway host is not used
+- PostgreSQL topology unchanged
+- Telegram integration unchanged
 - product decision fixed:
   - no separate gateway VM in another region
   - Polza is the long-term upstream provider
 
+## Current production routing note
+
+For the current production baseline on the existing Yandex VM:
+
+- main app and `ai-gateway` run as separate Docker containers on the same VM
+- container-to-container routing uses Docker network `t2-app-net`
+- production `AI_GATEWAY_URL` must be `http://ai-gateway:3001`
+- `127.0.0.1:3001` is acceptable only for host-level checks from the VM, not as the main app container runtime URL
+
 ## Current active checkpoint
 
-Production cutover of `ai-gateway` to the existing Yandex VM using Polza as upstream provider, followed by first production end-to-end smoke for:
-
-- main app
-- ai-gateway
-- Polza upstream path
-- PostgreSQL write path
-- Telegram delivery path
+Docs sync after successful production cutover, followed by naming cleanup and light post-cutover hardening.
 
 ## Runtime naming status (current vs target)
 
@@ -78,26 +103,21 @@ Target runtime names (after separate technical pass):
 Status:
 
 - naming migration is **not complete yet**
-- do not mark the production Polza phase as complete until VM smoke is done
+- production Polza phase is complete and smoke-verified on the existing Yandex VM
+- do not present target naming as already implemented until the separate naming cleanup is done
 
 ## Next steps
 
-1. Rotate the exposed Polza API key if not already rotated after local testing.
-2. Prepare production `gateway.env` on the existing Yandex VM.
-3. Build and push the `ai-gateway` production image.
-4. Run `ai-gateway` on the existing Yandex VM.
-5. Set production main app `AI_GATEWAY_URL` to local VM routing for gateway.
-6. Verify `GET /healthz` for both main app and ai-gateway on VM.
-7. Run production end-to-end smoke:
-   - main app -> ai-gateway -> Polza -> PostgreSQL -> Telegram
-8. Confirm production no longer depends on direct OpenAI runtime access from Yandex region.
-9. Only after stable production smoke, perform naming cleanup:
+1. Finish docs sync across the status, deploy, smoke, and README files.
+2. Rotate the exposed Polza API key if it has not already been rotated after local testing, then re-run a short production smoke.
+3. Perform naming cleanup:
    - `GATEWAY_SHARED_SECRET -> AI_GATEWAY_SHARED_SECRET`
    - `OPENAI_* -> POLZA_*`
+4. Add minimal monitoring for healthz, 5xx, Polza failures, Telegram failures, and DB connectivity.
+5. Only after stable post-cutover monitoring, return to deeper `t2` production ingest work.
 
 ## Open checks
 
-- verify VM routing details for production `main app -> ai-gateway` traffic
 - verify request timeout and retries are acceptable for real call volume
 - rotate exposed Polza API key and any exposed development credentials before full production traffic
 - verify final provider/model naming in runtime env and docs

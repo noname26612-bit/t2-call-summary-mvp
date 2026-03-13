@@ -6,15 +6,21 @@
 
 - `ai-gateway` остаётся обязательным boundary
 - fixed long-term upstream strategy: **Polza**
-- local Polza validation: **confirmed**
+- production Polza cutover on the existing Yandex VM: **confirmed**
 
-Целевая схема после code cutover:
+Текущая production схема:
 
-`main app (Yandex VM) -> ai-gateway -> Polza`
+`main app (same Yandex VM) -> ai-gateway -> Polza`
+
+- main app и `ai-gateway` работают как отдельные Docker containers на одной existing Yandex VM
+- container-to-container routing uses Docker network `t2-app-net`
+- production main app uses `AI_GATEWAY_URL=http://ai-gateway:3001`
+- `127.0.0.1:3001` подходит только для host-level checks с VM
+- gateway не используется как отдельный публичный сервис
 
 ## Status update
 
-`ai-gateway` is now locally validated against Polza as upstream provider.
+`ai-gateway` подтверждён и локально, и в production smoke как рабочий Polza-backed gateway.
 
 Confirmed locally:
 - `GET /healthz` returns `{ "status": "ok" }`
@@ -22,9 +28,18 @@ Confirmed locally:
 - auth via shared secret works
 - the service is successfully used by the main app in local end-to-end flow
 
-Current next step:
-- deploy the same gateway runtime on the existing Yandex VM
-- run first production smoke through the full Polza-backed path
+Confirmed in production on the existing Yandex VM:
+- `GET /healthz` returns OK
+- main app successfully reaches gateway via `http://ai-gateway:3001`
+- `POST /analyze` is confirmed in gateway logs through Polza
+- current production route is:
+  - main app -> ai-gateway -> Polza -> PostgreSQL -> Telegram
+- Telegram delivery status in production smoke is `sent`
+
+Current follow-ups:
+- docs sync
+- naming cleanup
+- Polza API key rotation if it has not already been completed after local testing
 
 ## Endpoints
 
@@ -43,7 +58,7 @@ Target names after separate code cutover:
 - shared secret: `AI_GATEWAY_SHARED_SECRET`
 - provider vars: `POLZA_API_KEY`, `POLZA_BASE_URL`, `POLZA_MODEL`
 
-Не отмечайте production cutover как complete до VM smoke.
+Production cutover is complete. Naming cleanup remains pending.
 
 ## Requirements
 
@@ -91,6 +106,14 @@ Expected response:
 ```json
 {"status":"ok"}
 ```
+
+Production host-level verification on the current VM:
+
+```bash
+curl -s http://127.0.0.1:3001/healthz
+```
+
+Main app container runtime should still use `http://ai-gateway:3001` on `t2-app-net`.
 
 ## Example `POST /analyze`
 

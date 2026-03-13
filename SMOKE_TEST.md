@@ -1,6 +1,6 @@
 # SMOKE_TEST.md
 
-Beginner-friendly smoke guide for the confirmed local Polza-backed path and the next production smoke.
+Beginner-friendly smoke guide for the confirmed local Polza-backed path and the already-passed production baseline on the existing Yandex VM.
 
 ## Confirmed local smoke result
 
@@ -15,6 +15,20 @@ Confirmed locally:
 - `POST /api/process-call` returns `processed`
 - Telegram delivery status is `sent`
 
+## Confirmed production smoke result on the existing Yandex VM
+
+Confirmed in production:
+- main app and `ai-gateway` run as separate Docker containers on the same existing Yandex VM
+- container-to-container routing uses user-defined Docker network `t2-app-net`
+- production main app uses `AI_GATEWAY_URL=http://ai-gateway:3001`
+- `GET /healthz` for `ai-gateway` on VM returns OK
+- `GET /healthz` for main app on VM returns OK with `database=ok`
+- `POST /api/process-call` on VM returned `processed`
+- `ai-gateway` logs confirmed successful `POST /analyze` through Polza
+- Telegram delivery status in production smoke is `sent`
+- current production route:
+  - main app -> ai-gateway -> Polza -> PostgreSQL -> Telegram
+
 ## Important local routing note
 
 For the local main app to gateway connection, use:
@@ -24,6 +38,15 @@ AI_GATEWAY_URL=http://127.0.0.1:3001
 ```
 
 Do not rely on `localhost` here unless it is explicitly re-verified in the current environment, because local resolution can differ and lead to avoidable gateway network errors.
+
+## Important production routing note
+
+For the current production baseline on the existing Yandex VM:
+
+- main app and `ai-gateway` run as separate Docker containers on the same VM
+- container-to-container routing uses Docker network `t2-app-net`
+- production `AI_GATEWAY_URL` must be `http://ai-gateway:3001`
+- `127.0.0.1:3001` is acceptable only for host-level checks from the VM, not as the main app container runtime URL
 
 ## Before you start
 
@@ -389,4 +412,7 @@ Smoke-тест можно считать успешным, если:
 Current status note:
 
 - локальный smoke для маршрута `main app -> ai-gateway -> Polza -> PostgreSQL -> Telegram` уже подтверждён
-- production phase нельзя отмечать complete, пока такой же smoke не пройден на existing Yandex VM
+- production smoke на existing Yandex VM уже подтверждён для маршрута `main app -> ai-gateway -> Polza -> PostgreSQL -> Telegram`
+- production main app container uses `AI_GATEWAY_URL=http://ai-gateway:3001` через `t2-app-net`
+- `127.0.0.1:3001` и `127.0.0.1:3000` используются только для host-level checks с VM
+- naming cleanup remains a separate follow-up task
