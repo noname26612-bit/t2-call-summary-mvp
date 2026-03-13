@@ -74,12 +74,12 @@ function loadConfig() {
     logLevel: getOptionalStringFromNames(['LOG_LEVEL'], DEFAULT_LOG_LEVEL),
     bodyLimit: getOptionalStringFromNames(['BODY_LIMIT'], DEFAULT_BODY_LIMIT),
     shutdownTimeoutMs: parsePositiveIntFromNames('SHUTDOWN_TIMEOUT_MS', [], DEFAULT_SHUTDOWN_TIMEOUT_MS),
-    gatewaySharedSecret: getRequiredStringFromNames('AI_GATEWAY_SHARED_SECRET', ['GATEWAY_SHARED_SECRET']),
+    gatewaySharedSecret: getRequiredStringFromNames('AI_GATEWAY_SHARED_SECRET'),
     openai: {
-      apiKey: getRequiredStringFromNames('POLZA_API_KEY', ['OPENAI_API_KEY']),
+      apiKey: getRequiredStringFromNames('POLZA_API_KEY'),
       baseUrl: getOptionalStringFromNames(['POLZA_BASE_URL'], DEFAULT_POLZA_BASE_URL),
-      model: getOptionalStringFromNames(['POLZA_MODEL', 'OPENAI_MODEL'], DEFAULT_POLZA_MODEL),
-      timeoutMs: parsePositiveIntFromNames('POLZA_TIMEOUT_MS', ['OPENAI_TIMEOUT_MS'], DEFAULT_POLZA_TIMEOUT_MS)
+      model: getOptionalStringFromNames(['POLZA_MODEL'], DEFAULT_POLZA_MODEL),
+      timeoutMs: parsePositiveIntFromNames('POLZA_TIMEOUT_MS', [], DEFAULT_POLZA_TIMEOUT_MS)
     }
   };
 }

@@ -38,7 +38,6 @@ Confirmed in production on the existing Yandex VM:
 
 Current follow-ups:
 - docs sync
-- naming cleanup
 - Polza API key rotation if it has not already been completed after local testing
 
 ## Endpoints
@@ -46,25 +45,17 @@ Current follow-ups:
 - `GET /healthz` -> `{ "status": "ok" }`
 - `POST /analyze` -> возвращает структурированный анализ
 
-## Runtime naming status (current vs target)
-
-Current runtime names in code:
-
-- shared secret: `GATEWAY_SHARED_SECRET`
-- provider vars: `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_TIMEOUT_MS`
-
-Target names after separate code cutover:
+## Runtime naming (canonical)
 
 - shared secret: `AI_GATEWAY_SHARED_SECRET`
-- provider vars: `POLZA_API_KEY`, `POLZA_BASE_URL`, `POLZA_MODEL`
-
-Production cutover is complete. Naming cleanup remains pending.
+- provider vars: `POLZA_API_KEY`, `POLZA_BASE_URL`, `POLZA_MODEL`, `POLZA_TIMEOUT_MS`
+- legacy names `GATEWAY_SHARED_SECRET` and `OPENAI_*` are no longer used by `ai-gateway` runtime code
 
 ## Requirements
 
 - Node.js 20+
 - shared secret between main app and gateway
-- provider credentials (current names or target names after code cutover)
+- provider credentials: `POLZA_API_KEY` (optional overrides: `POLZA_BASE_URL`, `POLZA_MODEL`, `POLZA_TIMEOUT_MS`)
 
 ## Quick local start
 

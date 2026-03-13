@@ -225,7 +225,7 @@ function buildUserPrompt(payload) {
 function createOpenAIAnalyzer(config, logger) {
   if (!config || !isNonEmptyString(config.apiKey)) {
     throw new OpenAIClientError(
-      'POLZA_API_KEY is required (OPENAI_API_KEY is supported only as a temporary fallback)',
+      'POLZA_API_KEY is required',
       500,
       'POLZA_MISSING_API_KEY'
     );

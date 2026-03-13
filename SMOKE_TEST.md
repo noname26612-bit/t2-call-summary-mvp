@@ -61,17 +61,10 @@ cd /Users/nonamenoname/Documents/Транскрибация/t2-call-summary-mvp
 
 ## Runtime naming status (important)
 
-Current runtime names in `ai-gateway` code:
-
-- `GATEWAY_SHARED_SECRET`
-- `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_TIMEOUT_MS`
-
-Target names after separate code cutover:
+Canonical runtime names in `ai-gateway` code:
 
 - `AI_GATEWAY_SHARED_SECRET`
-- `POLZA_API_KEY`, `POLZA_BASE_URL`, `POLZA_MODEL`
-
-Стратегия Polza зафиксирована, но naming migration выполняется отдельным техническим проходом.
+- `POLZA_API_KEY`, `POLZA_BASE_URL`, `POLZA_MODEL`, `POLZA_TIMEOUT_MS`
 
 ## Step 1. Install dependencies and prepare env files
 
@@ -123,8 +116,11 @@ Main app `.env`:
 
 Gateway `ai-gateway/.env`:
 - `PORT=3001`
-- `GATEWAY_SHARED_SECRET=<same_shared_secret_as_main_app>`
-- current runtime provider vars for the Polza-backed path (`OPENAI_*`) или их эквивалент после code cutover
+- `AI_GATEWAY_SHARED_SECRET=<same_shared_secret_as_main_app>`
+- `POLZA_API_KEY=<polza-api-key>`
+- `POLZA_BASE_URL=https://polza.ai/api/v1` (или ваш runtime URL)
+- `POLZA_MODEL=<polza-model>`
+- `POLZA_TIMEOUT_MS=20000`
 
 ### Expected result
 Оба env файла заполнены согласованными значениями.
@@ -415,4 +411,4 @@ Current status note:
 - production smoke на existing Yandex VM уже подтверждён для маршрута `main app -> ai-gateway -> Polza -> PostgreSQL -> Telegram`
 - production main app container uses `AI_GATEWAY_URL=http://ai-gateway:3001` через `t2-app-net`
 - `127.0.0.1:3001` и `127.0.0.1:3000` используются только для host-level checks с VM
-- naming cleanup remains a separate follow-up task
+- runtime naming cleanup для `ai-gateway` уже применён (`AI_GATEWAY_SHARED_SECRET`, `POLZA_*`)

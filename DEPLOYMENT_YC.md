@@ -55,21 +55,15 @@ For the current production baseline on the existing Yandex VM:
 
 ## Runtime naming status (important)
 
-Current runtime names in `ai-gateway` code (before separate code cutover):
-
-- `GATEWAY_SHARED_SECRET`
-- `OPENAI_API_KEY`
-- `OPENAI_MODEL`
-- `OPENAI_TIMEOUT_MS`
-
-Target names after separate technical code cutover:
+Canonical runtime names in `ai-gateway` code:
 
 - `AI_GATEWAY_SHARED_SECRET`
 - `POLZA_API_KEY`
 - `POLZA_BASE_URL`
 - `POLZA_MODEL`
+- `POLZA_TIMEOUT_MS`
 
-Production cutover is already confirmed. Naming cleanup remains a separate follow-up task.
+Production cutover is confirmed, and runtime naming cleanup is applied.
 
 ## Step 1. Rotate secrets
 
@@ -209,18 +203,11 @@ LOG_LEVEL=info
 BODY_LIMIT=1mb
 SHUTDOWN_TIMEOUT_MS=10000
 
-# Current runtime secret name in gateway code:
-GATEWAY_SHARED_SECRET=<shared-secret>
-
-# Target provider names after code cutover:
-# POLZA_API_KEY=<polza-api-key>
-# POLZA_BASE_URL=https://polza.ai/api/v1
-# POLZA_MODEL=<polza-model>
-
-# Current runtime provider names before code cutover:
-OPENAI_API_KEY=<provider-api-key-current-runtime>
-OPENAI_MODEL=gpt-4.1-mini
-OPENAI_TIMEOUT_MS=20000
+AI_GATEWAY_SHARED_SECRET=<shared-secret>
+POLZA_API_KEY=<polza-api-key>
+POLZA_BASE_URL=https://polza.ai/api/v1
+POLZA_MODEL=<polza-model>
+POLZA_TIMEOUT_MS=20000
 EOF_GATEWAY
 ```
 

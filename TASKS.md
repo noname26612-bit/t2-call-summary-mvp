@@ -62,7 +62,7 @@ Source of truth for current YC deploy progress and fixed decisions:
 
 - [x] Синхронизировать category enum в коде с бизнес-категориями (продажа/сервис/запчасти/аренда/спам/прочее)
 - [ ] Если Polza API key после локального теста ещё не ротирован, сделать rotation и повторить короткий production smoke
-- [ ] После успешного production Polza cutover выполнить naming cleanup:
+- [x] После успешного production Polza cutover выполнить naming cleanup:
   - `GATEWAY_SHARED_SECRET -> AI_GATEWAY_SHARED_SECRET`
   - `OPENAI_* -> POLZA_*`
 - [ ] После Polza cutover: мониторить реальный peak load / latency / failures до любых topology changes

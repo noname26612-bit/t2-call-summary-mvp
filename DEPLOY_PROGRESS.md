@@ -86,35 +86,26 @@ For the current production baseline on the existing Yandex VM:
 
 ## Current active checkpoint
 
-Docs sync after successful production cutover, followed by naming cleanup and light post-cutover hardening.
+Docs sync after successful production cutover and naming cleanup, followed by light post-cutover hardening.
 
-## Runtime naming status (current vs target)
+## Runtime naming status
 
-Current runtime names in code (before separate code cutover):
+Canonical runtime names in code:
 
-- `ai-gateway` shared secret: `GATEWAY_SHARED_SECRET`
-- `ai-gateway` provider env: `OPENAI_*`
-
-Target runtime names (after separate technical pass):
-
-- `GATEWAY_SHARED_SECRET -> AI_GATEWAY_SHARED_SECRET`
-- `OPENAI_* -> POLZA_*`
+- `ai-gateway` shared secret: `AI_GATEWAY_SHARED_SECRET`
+- `ai-gateway` provider env: `POLZA_API_KEY`, `POLZA_BASE_URL`, `POLZA_MODEL`, `POLZA_TIMEOUT_MS`
 
 Status:
 
-- naming migration is **not complete yet**
+- naming migration for `ai-gateway` env is complete
 - production Polza phase is complete and smoke-verified on the existing Yandex VM
-- do not present target naming as already implemented until the separate naming cleanup is done
+- docs and env examples are synchronized with canonical names
 
 ## Next steps
 
-1. Finish docs sync across the status, deploy, smoke, and README files.
-2. Rotate the exposed Polza API key if it has not already been rotated after local testing, then re-run a short production smoke.
-3. Perform naming cleanup:
-   - `GATEWAY_SHARED_SECRET -> AI_GATEWAY_SHARED_SECRET`
-   - `OPENAI_* -> POLZA_*`
-4. Add minimal monitoring for healthz, 5xx, Polza failures, Telegram failures, and DB connectivity.
-5. Only after stable post-cutover monitoring, return to deeper `t2` production ingest work.
+1. Rotate the exposed Polza API key if it has not already been rotated after local testing, then re-run a short production smoke.
+2. Add minimal monitoring for healthz, 5xx, Polza failures, Telegram failures, and DB connectivity.
+3. Only after stable post-cutover monitoring, return to deeper `t2` production ingest work.
 
 ## Open checks
 
