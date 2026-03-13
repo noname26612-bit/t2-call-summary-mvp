@@ -151,9 +151,15 @@ function loadConfig(options = {}) {
       apiTimeoutMs: parsePositiveInt('TELEGRAM_API_TIMEOUT_MS', DEFAULT_TELEGRAM_TIMEOUT_MS)
     },
     t2: {
+      ingestEnabled: parseBoolean('TELE2_INGEST_ENABLED', false),
       apiBaseUrl: getOptionalString('T2_API_BASE_URL', ''),
       apiToken: getOptionalString('T2_API_TOKEN', ''),
-      apiTimeoutMs: parsePositiveInt('T2_API_TIMEOUT_MS', DEFAULT_T2_TIMEOUT_MS)
+      apiTimeoutMs: parsePositiveInt('T2_API_TIMEOUT_MS', DEFAULT_T2_TIMEOUT_MS),
+      adapter: {
+        phoneFieldPath: getOptionalString('TELE2_PHONE_FIELD_PATH', ''),
+        callDateTimeFieldPath: getOptionalString('TELE2_CALL_DATETIME_FIELD_PATH', ''),
+        transcriptFieldPath: getOptionalString('TELE2_TRANSCRIPT_FIELD_PATH', '')
+      }
     },
     database: buildDatabaseConfig()
   };
