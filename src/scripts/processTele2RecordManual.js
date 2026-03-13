@@ -40,6 +40,8 @@ function parseArgs(argv) {
     aiGatewayUrl: process.env.AI_GATEWAY_URL || 'http://127.0.0.1:3001',
     aiGatewaySecret: process.env.AI_GATEWAY_SHARED_SECRET || '',
     aiGatewayTranscribePath: process.env.AI_GATEWAY_TRANSCRIBE_PATH || '/transcribe',
+    transcribeModel: process.env.TELE2_TRANSCRIBE_MODEL || '',
+    compareTranscribeModel: process.env.TELE2_COMPARE_TRANSCRIBE_MODEL || '',
     t2BaseUrl: process.env.T2_API_BASE_URL || 'https://ats2.t2.ru/crm/openapi',
     t2Token: process.env.T2_API_TOKEN || process.env.T2_ACCESS_TOKEN || '',
     t2AuthScheme: process.env.T2_AUTH_SCHEME || 'plain',
@@ -112,6 +114,26 @@ function parseArgs(argv) {
 
     if (arg === '--ai-gateway-transcribe-path') {
       parsed.aiGatewayTranscribePath = args.shift() || parsed.aiGatewayTranscribePath;
+      continue;
+    }
+
+    if (arg.startsWith('--transcribe-model=')) {
+      parsed.transcribeModel = arg.split('=').slice(1).join('=');
+      continue;
+    }
+
+    if (arg === '--transcribe-model') {
+      parsed.transcribeModel = args.shift() || parsed.transcribeModel;
+      continue;
+    }
+
+    if (arg.startsWith('--compare-transcribe-model=')) {
+      parsed.compareTranscribeModel = arg.split('=').slice(1).join('=');
+      continue;
+    }
+
+    if (arg === '--compare-transcribe-model') {
+      parsed.compareTranscribeModel = args.shift() || parsed.compareTranscribeModel;
       continue;
     }
 
@@ -239,6 +261,8 @@ function validateOptions(options) {
     aiGatewayUrl: options.aiGatewayUrl.trim(),
     aiGatewaySecret: options.aiGatewaySecret.trim(),
     aiGatewayTranscribePath: normalizedTranscribePath,
+    transcribeModel: options.transcribeModel.trim(),
+    compareTranscribeModel: options.compareTranscribeModel.trim(),
     t2BaseUrl: options.t2BaseUrl.trim(),
     t2Token: options.t2Token.trim(),
     ingestSecret: options.ingestSecret.trim(),
@@ -400,6 +424,7 @@ async function transcribeViaGateway({
   aiGatewayUrl,
   aiGatewaySecret,
   aiGatewayTranscribePath,
+  transcribeModel,
   timeoutMs
 }) {
   const audioBuffer = fs.readFileSync(tempFilePath);
@@ -412,6 +437,9 @@ async function transcribeViaGateway({
   formData.append('requestId', `manual-${Date.now()}`);
   formData.append('fileName', uploadFileName);
   formData.append('mimeType', 'audio/mpeg');
+  if (isNonEmptyString(transcribeModel)) {
+    formData.append('transcribeModel', transcribeModel.trim());
+  }
   formData.append(
     'audio',
     new Blob([audioBuffer], { type: 'audio/mpeg' }),
@@ -437,6 +465,7 @@ async function transcribeViaGateway({
   if (!response.ok) {
     const requestError = new Error(`ai-gateway transcription failed with status ${response.status}`);
     requestError.statusCode = response.status;
+    requestError.code = payload?.code || 'AI_GATEWAY_TRANSCRIBE_HTTP_ERROR';
     requestError.responseBody = payload || raw;
     throw requestError;
   }
@@ -451,6 +480,90 @@ async function transcribeViaGateway({
     model: isNonEmptyString(payload?.model) ? payload.model.trim() : '',
     audioBytes: Number.isInteger(payload?.audioBytes) ? payload.audioBytes : audioBuffer.length
   };
+}
+
+function buildTranscriptPreview(transcript) {
+  if (!isNonEmptyString(transcript)) {
+    return '';
+  }
+
+  const normalized = transcript.trim();
+  if (normalized.length <= 180) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, 177)}...`;
+}
+
+function resolveErrorCode(error) {
+  if (isNonEmptyString(error?.code)) {
+    return error.code.trim();
+  }
+
+  if (isNonEmptyString(error?.responseBody?.code)) {
+    return error.responseBody.code.trim();
+  }
+
+  return 'TRANSCRIBE_FAILED';
+}
+
+function isEmptyTranscriptionError(errorCode) {
+  return errorCode === 'POLZA_EMPTY_TRANSCRIPTION' || errorCode === 'AI_GATEWAY_EMPTY_TRANSCRIPT';
+}
+
+async function runTranscriptionAttempt({
+  tempFilePath,
+  recordFileName,
+  aiGatewayUrl,
+  aiGatewaySecret,
+  aiGatewayTranscribePath,
+  transcribeModel,
+  timeoutMs
+}) {
+  const startedAt = Date.now();
+
+  try {
+    const result = await transcribeViaGateway({
+      tempFilePath,
+      recordFileName,
+      aiGatewayUrl,
+      aiGatewaySecret,
+      aiGatewayTranscribePath,
+      transcribeModel,
+      timeoutMs
+    });
+
+    const durationMs = Date.now() - startedAt;
+    return {
+      ok: true,
+      result,
+      outcome: {
+        status: 'success',
+        model: result.model || (isNonEmptyString(transcribeModel) ? transcribeModel.trim() : 'default'),
+        transcriptLength: result.transcript.length,
+        preview: buildTranscriptPreview(result.transcript),
+        durationMs,
+        audioBytes: result.audioBytes
+      }
+    };
+  } catch (error) {
+    const durationMs = Date.now() - startedAt;
+    const errorCode = resolveErrorCode(error);
+    return {
+      ok: false,
+      error,
+      outcome: {
+        status: isEmptyTranscriptionError(errorCode) ? 'empty' : 'failed',
+        model: isNonEmptyString(transcribeModel) ? transcribeModel.trim() : 'default',
+        transcriptLength: 0,
+        preview: '',
+        durationMs,
+        errorCode,
+        errorMessage: isNonEmptyString(error?.message) ? error.message.trim() : 'Unknown transcription error',
+        statusCode: Number.isInteger(error?.statusCode) ? error.statusCode : null
+      }
+    };
+  }
 }
 
 async function sendProcessCall({
@@ -516,6 +629,8 @@ Options:
   --ai-gateway-url <url>          ai-gateway base URL (default: http://127.0.0.1:3001)
   --ai-gateway-secret <value>     ai-gateway shared secret (x-gateway-secret)
   --ai-gateway-transcribe-path    Transcribe endpoint path (default: /transcribe)
+  --transcribe-model <value>      Optional primary model override (example: openai/gpt-4o-mini-transcribe)
+  --compare-transcribe-model <v>  Optional compare model (example: openai/whisper-1 or "candidate")
   --t2-base-url <url>             Tele2 OpenAPI base (default: https://ats2.t2.ru/crm/openapi)
   --t2-token <token>              Tele2 access token (env fallback: T2_API_TOKEN/T2_ACCESS_TOKEN)
   --t2-auth-scheme <plain|bearer> Tele2 auth scheme (default: plain)
@@ -569,16 +684,39 @@ async function main() {
     timeoutMs: options.timeoutMs
   });
 
-  let transcriptionResult = null;
+  let primaryAttempt = null;
+  let compareAttempt = null;
+
   try {
-    transcriptionResult = await transcribeViaGateway({
+    primaryAttempt = await runTranscriptionAttempt({
       tempFilePath: audio.tempFilePath,
       recordFileName: options.recordFileName,
       aiGatewayUrl: options.aiGatewayUrl,
       aiGatewaySecret: options.aiGatewaySecret,
       aiGatewayTranscribePath: options.aiGatewayTranscribePath,
+      transcribeModel: options.transcribeModel,
       timeoutMs: options.timeoutMs
     });
+
+    if (!primaryAttempt.ok) {
+      const wrappedError = new Error(primaryAttempt.outcome.errorMessage || 'Primary transcription failed');
+      wrappedError.code = primaryAttempt.outcome.errorCode || 'PRIMARY_TRANSCRIPTION_FAILED';
+      wrappedError.statusCode = primaryAttempt.outcome.statusCode;
+      wrappedError.responseBody = primaryAttempt.error?.responseBody;
+      throw wrappedError;
+    }
+
+    if (isNonEmptyString(options.compareTranscribeModel)) {
+      compareAttempt = await runTranscriptionAttempt({
+        tempFilePath: audio.tempFilePath,
+        recordFileName: options.recordFileName,
+        aiGatewayUrl: options.aiGatewayUrl,
+        aiGatewaySecret: options.aiGatewaySecret,
+        aiGatewayTranscribePath: options.aiGatewayTranscribePath,
+        transcribeModel: options.compareTranscribeModel,
+        timeoutMs: options.timeoutMs
+      });
+    }
   } finally {
     if (!options.keepAudio) {
       try {
@@ -589,7 +727,7 @@ async function main() {
     }
   }
 
-  const transcript = transcriptionResult.transcript;
+  const transcript = primaryAttempt.result.transcript;
 
   const processCallResult = await sendProcessCall({
     processUrl: options.processUrl,
@@ -599,10 +737,6 @@ async function main() {
     transcript,
     timeoutMs: options.timeoutMs
   });
-
-  const transcriptPreview = transcript.length > 180
-    ? `${transcript.slice(0, 177)}...`
-    : transcript;
 
   process.stdout.write(`${JSON.stringify({
     ok: true,
@@ -615,10 +749,20 @@ async function main() {
       keptFilePath: options.keepAudio ? audio.tempFilePath : ''
     },
     transcription: {
-      model: transcriptionResult.model || 'unknown',
-      length: transcript.length,
-      preview: transcriptPreview,
-      source: 'ai-gateway'
+      ...primaryAttempt.outcome,
+      source: 'ai-gateway',
+      requestedModel: isNonEmptyString(options.transcribeModel) ? options.transcribeModel : 'default'
+    },
+    compareTranscription: compareAttempt
+      ? {
+          ...compareAttempt.outcome,
+          source: 'ai-gateway',
+          requestedModel: options.compareTranscribeModel
+        }
+      : null,
+    compareMode: {
+      enabled: Boolean(compareAttempt),
+      compareModel: isNonEmptyString(options.compareTranscribeModel) ? options.compareTranscribeModel : ''
     },
     aiGateway: {
       url: options.aiGatewayUrl,

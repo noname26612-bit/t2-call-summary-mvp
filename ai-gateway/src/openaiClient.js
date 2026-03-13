@@ -236,7 +236,10 @@ function createPolzaClient(config) {
     analyzeModel: isNonEmptyString(config.model) ? config.model.trim() : 'gpt-4.1-mini',
     transcribeModel: isNonEmptyString(config.transcribeModel)
       ? config.transcribeModel.trim()
-      : 'whisper-1'
+      : 'openai/gpt-4o-mini-transcribe',
+    transcribeCandidateModel: isNonEmptyString(config.transcribeCandidateModel)
+      ? config.transcribeCandidateModel.trim()
+      : ''
   };
 }
 
@@ -453,10 +456,32 @@ function createOpenAIAnalyzer(config, logger) {
 }
 
 function createOpenAITranscriber(config, logger) {
-  const { client, transcribeModel } = createPolzaClient(config);
+  const { client, transcribeModel, transcribeCandidateModel } = createPolzaClient(config);
+
+  function resolveTranscribeModel(requestedModelRaw) {
+    const requested = isNonEmptyString(requestedModelRaw) ? requestedModelRaw.trim() : '';
+    if (!requested) {
+      return transcribeModel;
+    }
+
+    if (requested.toLowerCase() === 'candidate') {
+      if (!isNonEmptyString(transcribeCandidateModel)) {
+        throw new OpenAIClientError(
+          'POLZA_TRANSCRIBE_MODEL_CANDIDATE is not configured',
+          400,
+          'TRANSCRIBE_CANDIDATE_MODEL_NOT_CONFIGURED'
+        );
+      }
+
+      return transcribeCandidateModel;
+    }
+
+    return requested;
+  }
 
   return async function transcribeAudio(payload) {
     const audioBuffer = resolveAudioBuffer(payload);
+    const effectiveModel = resolveTranscribeModel(payload?.transcribeModel);
     const extension = resolveTranscriptionFileExtension({
       fileName: payload?.fileName || '',
       mimeType: payload?.mimeType || ''
@@ -466,7 +491,7 @@ function createOpenAITranscriber(config, logger) {
     let response;
     try {
       response = await client.audio.transcriptions.create({
-        model: transcribeModel,
+        model: effectiveModel,
         file: fs.createReadStream(tempFilePath),
         response_format: 'text'
       });
@@ -495,13 +520,13 @@ function createOpenAITranscriber(config, logger) {
     logger.info('polza_transcription_success', {
       requestId: payload?.requestId || '',
       transcriptLength: transcript.length,
-      model: transcribeModel,
+      model: effectiveModel,
       audioBytes: audioBuffer.length
     });
 
     return {
       transcript,
-      model: transcribeModel,
+      model: effectiveModel,
       audioBytes: audioBuffer.length
     };
   };

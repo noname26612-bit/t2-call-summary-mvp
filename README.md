@@ -155,6 +155,24 @@ Helper:
 - транскрибирует аудио через `ai-gateway /transcribe` (upstream: Polza) через `multipart/form-data` file upload
 - отправляет canonical payload в `POST /api/process-call`
 
+По умолчанию используется production-validated STT модель:
+- `openai/gpt-4o-mini-transcribe`
+
+Opt-in compare режим для ручного quality-check (без глобального switch):
+
+```bash
+npm run manual:tele2-record -- 2026-03-13/177342115767354776 \
+  --transcribe-model openai/gpt-4o-mini-transcribe \
+  --compare-transcribe-model openai/whisper-1
+```
+
+Можно использовать alias `candidate` (берётся из `POLZA_TRANSCRIBE_MODEL_CANDIDATE` в `ai-gateway` env):
+
+```bash
+npm run manual:tele2-record -- 2026-03-13/177342115767354776 \
+  --compare-transcribe-model candidate
+```
+
 ### Tele2 poll-once MVP (manual command)
 
 Для безопасной ручной обработки новых Tele2 записей добавлена one-shot команда:
@@ -172,12 +190,23 @@ npm run tele2:poll-once
 - только ручной one-shot запуск (без cron/scheduler/worker)
 - dedup durable в PostgreSQL (`tele2_polled_records`)
 - в dry-run не вызывается `/api/process-call`
+- обычный flow без флагов использует default STT модель (`openai/gpt-4o-mini-transcribe`)
 
 Dry-run пример:
 
 ```bash
 npm run tele2:poll-once -- --dry-run --max-candidates 3
 ```
+
+Dry-run compare пример (candidate не отправляется в `/api/process-call`):
+
+```bash
+npm run tele2:poll-once -- --dry-run --max-candidates 3 \
+  --transcribe-model openai/gpt-4o-mini-transcribe \
+  --compare-transcribe-model openai/whisper-1
+```
+
+Для safety compare mode в `tele2:poll-once` разрешён только при `--dry-run`.
 
 Первый запуск после обновления кода:
 
@@ -296,6 +325,8 @@ Runtime и документация синхронизированы с этим
 - `TELE2_POLL_MIN_AUDIO_BYTES=4096`
 - `TELE2_POLL_DRY_RUN=false`
 - `TELE2_POLL_RETRY_FAILED=true`
+- `TELE2_POLL_TRANSCRIBE_MODEL` (optional primary override for `tele2:poll-once`)
+- `TELE2_POLL_COMPARE_TRANSCRIBE_MODEL` (optional compare model for `tele2:poll-once`, dry-run only)
 - `PROCESS_CALL_URL=http://127.0.0.1:3000/api/process-call`
 - `AI_GATEWAY_TRANSCRIBE_PATH=/transcribe`
 
@@ -317,6 +348,8 @@ Runtime и документация синхронизированы с этим
 - `POLZA_API_KEY`
 - `POLZA_BASE_URL`
 - `POLZA_MODEL`
+- `POLZA_TRANSCRIBE_MODEL` (default: `openai/gpt-4o-mini-transcribe`)
+- `POLZA_TRANSCRIBE_MODEL_CANDIDATE` (optional, for opt-in compare tests, e.g. `openai/whisper-1`)
 - `POLZA_TIMEOUT_MS`
 - `AI_GATEWAY_SHARED_SECRET`
 

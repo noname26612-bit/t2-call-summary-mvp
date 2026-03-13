@@ -179,7 +179,8 @@ function createApp({ config, logger, analyzeCall, transcribeAudio }) {
         audioBuffer: hasAudioFile ? req.file.buffer : undefined,
         audioBase64: !hasAudioFile ? normalizeOptionalString(payload.audioBase64) : '',
         fileName: normalizeOptionalString(payload.fileName) || normalizeOptionalString(req?.file?.originalname),
-        mimeType: effectiveMimeType
+        mimeType: effectiveMimeType,
+        transcribeModel: normalizeOptionalString(payload.transcribeModel)
       });
 
       return res.status(200).json(response);
@@ -306,7 +307,8 @@ function bootstrap() {
       port: config.port,
       nodeEnv: config.nodeEnv,
       model: config.openai.model,
-      transcribeModel: config.openai.transcribeModel
+      transcribeModel: config.openai.transcribeModel,
+      transcribeCandidateModelConfigured: isNonEmptyString(config.openai.transcribeCandidateModel)
     });
   });
 

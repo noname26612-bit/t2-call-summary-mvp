@@ -197,6 +197,26 @@ function parseArgs(argv, defaults) {
       continue;
     }
 
+    if (arg.startsWith('--transcribe-model=')) {
+      parsed.transcribeModel = arg.split('=').slice(1).join('=');
+      continue;
+    }
+
+    if (arg === '--transcribe-model') {
+      parsed.transcribeModel = args.shift() || parsed.transcribeModel;
+      continue;
+    }
+
+    if (arg.startsWith('--compare-transcribe-model=')) {
+      parsed.compareTranscribeModel = arg.split('=').slice(1).join('=');
+      continue;
+    }
+
+    if (arg === '--compare-transcribe-model') {
+      parsed.compareTranscribeModel = args.shift() || parsed.compareTranscribeModel;
+      continue;
+    }
+
     if (arg.startsWith('--t2-base-url=')) {
       parsed.t2BaseUrl = arg.split('=').slice(1).join('=');
       continue;
@@ -524,6 +544,7 @@ async function transcribeViaGateway({
   aiGatewayUrl,
   aiGatewaySecret,
   aiGatewayTranscribePath,
+  transcribeModel,
   timeoutMs
 }) {
   const audioBuffer = fs.readFileSync(tempFilePath);
@@ -534,6 +555,9 @@ async function transcribeViaGateway({
   formData.append('requestId', `tele2-poll-${crypto.randomUUID()}`);
   formData.append('fileName', uploadFileName);
   formData.append('mimeType', 'audio/mpeg');
+  if (isNonEmptyString(transcribeModel)) {
+    formData.append('transcribeModel', transcribeModel.trim());
+  }
   formData.append(
     'audio',
     new Blob([audioBuffer], { type: 'audio/mpeg' }),
@@ -573,9 +597,96 @@ async function transcribeViaGateway({
 
   return {
     transcript,
-    model: isNonEmptyString(payload?.model) ? payload.model.trim() : '',
+    model: isNonEmptyString(payload?.model)
+      ? payload.model.trim()
+      : (isNonEmptyString(transcribeModel) ? transcribeModel.trim() : ''),
     audioBytes: Number.isInteger(payload?.audioBytes) ? payload.audioBytes : audioBuffer.length
   };
+}
+
+function buildTranscriptPreview(transcript) {
+  if (!isNonEmptyString(transcript)) {
+    return '';
+  }
+
+  const normalized = transcript.trim();
+  if (normalized.length <= 140) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, 137)}...`;
+}
+
+function resolveTranscribeErrorCode(error) {
+  if (isNonEmptyString(error?.code)) {
+    return error.code.trim();
+  }
+
+  if (isNonEmptyString(error?.responseBody?.code)) {
+    return error.responseBody.code.trim();
+  }
+
+  return 'AI_GATEWAY_TRANSCRIBE_FAILED';
+}
+
+function isEmptyTranscriptionCode(errorCode) {
+  return errorCode === 'POLZA_EMPTY_TRANSCRIPTION' || errorCode === 'AI_GATEWAY_EMPTY_TRANSCRIPT';
+}
+
+async function runTranscriptionAttempt({
+  tempFilePath,
+  recordFileName,
+  aiGatewayUrl,
+  aiGatewaySecret,
+  aiGatewayTranscribePath,
+  transcribeModel,
+  timeoutMs
+}) {
+  const startedAt = Date.now();
+
+  try {
+    const result = await transcribeViaGateway({
+      tempFilePath,
+      recordFileName,
+      aiGatewayUrl,
+      aiGatewaySecret,
+      aiGatewayTranscribePath,
+      transcribeModel,
+      timeoutMs
+    });
+
+    const durationMs = Date.now() - startedAt;
+    return {
+      ok: true,
+      result,
+      outcome: {
+        status: 'success',
+        model: result.model || (isNonEmptyString(transcribeModel) ? transcribeModel.trim() : 'default'),
+        transcriptLength: result.transcript.length,
+        preview: buildTranscriptPreview(result.transcript),
+        durationMs,
+        audioBytes: result.audioBytes
+      }
+    };
+  } catch (error) {
+    const durationMs = Date.now() - startedAt;
+    const errorCode = resolveTranscribeErrorCode(error);
+    return {
+      ok: false,
+      error,
+      outcome: {
+        status: isEmptyTranscriptionCode(errorCode) ? 'empty' : 'failed',
+        model: isNonEmptyString(transcribeModel) ? transcribeModel.trim() : 'default',
+        transcriptLength: 0,
+        preview: '',
+        durationMs,
+        audioBytes: null,
+        errorCode,
+        errorMessage: truncateMessage(error?.message || 'Unknown transcription error', 300),
+        statusCode: Number.isInteger(error?.statusCode) ? error.statusCode : null
+      }
+    };
+  }
 }
 
 async function sendProcessCall({
@@ -911,22 +1022,73 @@ async function processCandidate({
       return;
     }
 
-    const transcription = await transcribeViaGateway({
+    const primaryAttempt = await runTranscriptionAttempt({
       tempFilePath: audio.tempFilePath,
       recordFileName,
       aiGatewayUrl: config.aiGatewayUrl,
       aiGatewaySecret: config.aiGatewaySecret,
       aiGatewayTranscribePath: config.aiGatewayTranscribePath,
+      transcribeModel: config.transcribeModel,
       timeoutMs: config.timeoutMs
     });
+
+    if (!primaryAttempt.ok) {
+      const primaryError = primaryAttempt.error || new Error('Primary transcription failed');
+      if (!isNonEmptyString(primaryError.code) && isNonEmptyString(primaryAttempt.outcome?.errorCode)) {
+        primaryError.code = primaryAttempt.outcome.errorCode;
+      }
+
+      if (!Number.isInteger(primaryError.statusCode) && Number.isInteger(primaryAttempt.outcome?.statusCode)) {
+        primaryError.statusCode = primaryAttempt.outcome.statusCode;
+      }
+
+      throw primaryError;
+    }
+
+    const transcription = primaryAttempt.result;
 
     stats.transcribed += 1;
     logger.info('tele2_poll_candidate_transcribed', {
       recordFileName,
       transcriptLength: transcription.transcript.length,
       model: transcription.model || 'unknown',
+      durationMs: primaryAttempt.outcome.durationMs,
+      requestedModel: isNonEmptyString(config.transcribeModel) ? config.transcribeModel : '',
       phoneLast4: phoneLast4(phone)
     });
+
+    let compareAttempt = null;
+    if (isNonEmptyString(config.compareTranscribeModel)) {
+      compareAttempt = await runTranscriptionAttempt({
+        tempFilePath: audio.tempFilePath,
+        recordFileName,
+        aiGatewayUrl: config.aiGatewayUrl,
+        aiGatewaySecret: config.aiGatewaySecret,
+        aiGatewayTranscribePath: config.aiGatewayTranscribePath,
+        transcribeModel: config.compareTranscribeModel,
+        timeoutMs: config.timeoutMs
+      });
+
+      stats.compareAttempted += 1;
+      if (compareAttempt.outcome.status === 'success') {
+        stats.compareSuccess += 1;
+      } else if (compareAttempt.outcome.status === 'empty') {
+        stats.compareEmpty += 1;
+      } else {
+        stats.compareFailed += 1;
+      }
+
+      logger.info('tele2_poll_candidate_compare_result', {
+        recordFileName,
+        compareStatus: compareAttempt.outcome.status,
+        compareModel: compareAttempt.outcome.model,
+        compareTranscriptLength: compareAttempt.outcome.transcriptLength,
+        compareDurationMs: compareAttempt.outcome.durationMs,
+        comparePreview: compareAttempt.outcome.preview,
+        compareErrorCode: compareAttempt.outcome.errorCode || '',
+        phoneLast4: phoneLast4(phone)
+      });
+    }
 
     if (config.dryRun) {
       stats.dryRunReady += 1;
@@ -934,7 +1096,10 @@ async function processCandidate({
         recordFileName,
         phoneLast4: phoneLast4(phone),
         callDateTime,
-        transcriptLength: transcription.transcript.length
+        transcriptLength: transcription.transcript.length,
+        model: transcription.model || 'unknown',
+        compareStatus: compareAttempt?.outcome?.status || '',
+        compareModel: compareAttempt?.outcome?.model || ''
       });
       return;
     }
@@ -1047,6 +1212,8 @@ function buildDefaultsFromEnv() {
     aiGatewayUrl: process.env.AI_GATEWAY_URL || DEFAULT_AI_GATEWAY_URL,
     aiGatewaySecret: process.env.AI_GATEWAY_SHARED_SECRET || '',
     aiGatewayTranscribePath: process.env.AI_GATEWAY_TRANSCRIBE_PATH || '/transcribe',
+    transcribeModel: process.env.TELE2_POLL_TRANSCRIBE_MODEL || '',
+    compareTranscribeModel: process.env.TELE2_POLL_COMPARE_TRANSCRIBE_MODEL || '',
     processUrl: process.env.PROCESS_CALL_URL || DEFAULT_PROCESS_URL,
     ingestSecret: process.env.INGEST_SHARED_SECRET || '',
     logLevel: process.env.LOG_LEVEL || 'info'
@@ -1084,6 +1251,16 @@ function validateRuntimeConfig(rawConfig) {
   const transcribePath = isNonEmptyString(rawConfig.aiGatewayTranscribePath)
     ? rawConfig.aiGatewayTranscribePath.trim()
     : '/transcribe';
+  const transcribeModel = isNonEmptyString(rawConfig.transcribeModel)
+    ? rawConfig.transcribeModel.trim()
+    : '';
+  const compareTranscribeModel = isNonEmptyString(rawConfig.compareTranscribeModel)
+    ? rawConfig.compareTranscribeModel.trim()
+    : '';
+
+  if (isNonEmptyString(compareTranscribeModel) && !rawConfig.dryRun) {
+    throw new Error('compare-transcribe-model is allowed only with --dry-run to keep production flow safe');
+  }
 
   const normalizedConfig = {
     ...rawConfig,
@@ -1093,6 +1270,8 @@ function validateRuntimeConfig(rawConfig) {
     aiGatewayUrl: rawConfig.aiGatewayUrl.trim(),
     aiGatewaySecret: rawConfig.aiGatewaySecret.trim(),
     aiGatewayTranscribePath: transcribePath.startsWith('/') ? transcribePath : `/${transcribePath}`,
+    transcribeModel,
+    compareTranscribeModel,
     processUrl: rawConfig.processUrl.trim(),
     ingestSecret: isNonEmptyString(rawConfig.ingestSecret) ? rawConfig.ingestSecret.trim() : '',
     offsetMeta
@@ -1132,6 +1311,8 @@ Options:
   --ai-gateway-url <url>             ai-gateway base URL
   --ai-gateway-secret <value>        ai-gateway shared secret
   --ai-gateway-transcribe-path <p>   Transcribe path (default: /transcribe)
+  --transcribe-model <model>         Optional primary model override (example: openai/gpt-4o-mini-transcribe)
+  --compare-transcribe-model <m>     Optional compare model (dry-run only, example: openai/whisper-1 or "candidate")
   --process-url <url>                process-call URL
   --ingest-secret <value>            Optional X-Ingest-Secret for process-call
   --help                             Show this help
@@ -1168,6 +1349,10 @@ async function main() {
     dedupSkipped: 0,
     downloaded: 0,
     transcribed: 0,
+    compareAttempted: 0,
+    compareSuccess: 0,
+    compareEmpty: 0,
+    compareFailed: 0,
     dryRunReady: 0,
     processed: 0,
     processDuplicates: 0,
@@ -1183,6 +1368,8 @@ async function main() {
     maxCandidates: config.maxCandidates,
     minAudioBytes: config.minAudioBytes,
     retryFailed: config.retryFailed,
+    transcribeModel: isNonEmptyString(config.transcribeModel) ? config.transcribeModel : '',
+    compareTranscribeModel: isNonEmptyString(config.compareTranscribeModel) ? config.compareTranscribeModel : '',
     infoWindowStart: window.start,
     infoWindowEnd: window.end
   });
@@ -1251,6 +1438,11 @@ async function main() {
       infoWindow: {
         start: window.start,
         end: window.end
+      },
+      compareMode: {
+        enabled: isNonEmptyString(config.compareTranscribeModel),
+        compareModel: isNonEmptyString(config.compareTranscribeModel) ? config.compareTranscribeModel : '',
+        primaryModelOverride: isNonEmptyString(config.transcribeModel) ? config.transcribeModel : ''
       },
       stats
     };

@@ -44,12 +44,12 @@ Current follow-ups:
 
 - `GET /healthz` -> `{ "status": "ok" }`
 - `POST /analyze` -> возвращает структурированный анализ
-- `POST /transcribe` -> возвращает транскрипт аудио через Polza (preferred: `multipart/form-data` upload field `audio`)
+- `POST /transcribe` -> возвращает транскрипт аудио через Polza (preferred: `multipart/form-data` upload field `audio`, optional `transcribeModel` override)
 
 ## Runtime naming (canonical)
 
 - shared secret: `AI_GATEWAY_SHARED_SECRET`
-- provider vars: `POLZA_API_KEY`, `POLZA_BASE_URL`, `POLZA_MODEL`, `POLZA_TRANSCRIBE_MODEL`, `POLZA_TIMEOUT_MS`
+- provider vars: `POLZA_API_KEY`, `POLZA_BASE_URL`, `POLZA_MODEL`, `POLZA_TRANSCRIBE_MODEL`, `POLZA_TRANSCRIBE_MODEL_CANDIDATE`, `POLZA_TIMEOUT_MS`
 - upload guard var: `TRANSCRIBE_FILE_MAX_BYTES` (default `20971520`)
 - legacy names `GATEWAY_SHARED_SECRET` and `OPENAI_*` are no longer used by `ai-gateway` runtime code
 
@@ -57,7 +57,13 @@ Current follow-ups:
 
 - Node.js 20+
 - shared secret between main app and gateway
-- provider credentials: `POLZA_API_KEY` (optional overrides: `POLZA_BASE_URL`, `POLZA_MODEL`, `POLZA_TRANSCRIBE_MODEL`, `POLZA_TIMEOUT_MS`)
+- provider credentials: `POLZA_API_KEY` (optional overrides: `POLZA_BASE_URL`, `POLZA_MODEL`, `POLZA_TRANSCRIBE_MODEL`, `POLZA_TRANSCRIBE_MODEL_CANDIDATE`, `POLZA_TIMEOUT_MS`)
+
+## STT model safety defaults
+
+- default STT model stays `openai/gpt-4o-mini-transcribe`
+- cheaper model testing is opt-in only via request override (`transcribeModel`) or script flags
+- do not do blind full switch to `openai/whisper-1` without validation on real recordings
 
 ## Quick local start
 
@@ -144,6 +150,16 @@ curl -s -X POST http://localhost:3001/transcribe \
   -F "requestId=req-stt-1" \
   -F "fileName=sample.mp3" \
   -F "mimeType=audio/mpeg" \
+  -F "transcribeModel=openai/gpt-4o-mini-transcribe" \
+  -F "audio=@./sample.mp3;type=audio/mpeg"
+```
+
+For candidate model test without full switch:
+
+```bash
+curl -s -X POST http://localhost:3001/transcribe \
+  -H "x-gateway-secret: replace_with_strong_shared_secret" \
+  -F "transcribeModel=candidate" \
   -F "audio=@./sample.mp3;type=audio/mpeg"
 ```
 
@@ -152,7 +168,7 @@ Expected response shape:
 ```json
 {
   "transcript": "Здравствуйте, подскажите цену и срок поставки.",
-  "model": "whisper-1",
+  "model": "openai/gpt-4o-mini-transcribe",
   "audioBytes": 98304
 }
 ```
@@ -161,5 +177,6 @@ Expected response shape:
 
 - `401` если отсутствует или неверный `x-gateway-secret`
 - `400` если `transcript`/`audio` пустой, multipart невалиден или JSON невалиден
+- `400` если передан `transcribeModel=candidate`, но `POLZA_TRANSCRIBE_MODEL_CANDIDATE` не задан
 - `413` если файл больше `TRANSCRIBE_FILE_MAX_BYTES` или JSON body превышает `BODY_LIMIT`
 - `502` если ошибка обращения к upstream provider
