@@ -2,6 +2,7 @@ const DEFAULT_PORT = 8080;
 const DEFAULT_LOG_LEVEL = 'info';
 const DEFAULT_POLZA_BASE_URL = 'https://polza.ai/api/v1';
 const DEFAULT_POLZA_MODEL = 'gpt-4.1-mini';
+const DEFAULT_POLZA_TRANSCRIBE_MODEL = 'whisper-1';
 const DEFAULT_POLZA_TIMEOUT_MS = 20000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10000;
 const DEFAULT_BODY_LIMIT = '1mb';
@@ -79,6 +80,10 @@ function loadConfig() {
       apiKey: getRequiredStringFromNames('POLZA_API_KEY'),
       baseUrl: getOptionalStringFromNames(['POLZA_BASE_URL'], DEFAULT_POLZA_BASE_URL),
       model: getOptionalStringFromNames(['POLZA_MODEL'], DEFAULT_POLZA_MODEL),
+      transcribeModel: getOptionalStringFromNames(
+        ['POLZA_TRANSCRIBE_MODEL'],
+        DEFAULT_POLZA_TRANSCRIBE_MODEL
+      ),
       timeoutMs: parsePositiveIntFromNames('POLZA_TIMEOUT_MS', [], DEFAULT_POLZA_TIMEOUT_MS)
     }
   };

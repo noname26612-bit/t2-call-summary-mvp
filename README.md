@@ -124,6 +124,33 @@ Topology changes (worker/queue/extra services) не требуются на эт
 
 `POST /dev/t2-ingest` остаётся scaffold/debug-маршрутом.
 
+### Manual one-record bridge test (temporary)
+
+Для ручной проверки маршрута `Tele2 file -> ai-gateway transcription (Polza) -> /api/process-call` добавлен временный helper:
+
+```bash
+npm run manual:tele2-record -- 2026-03-13/177342115767354776
+```
+
+Минимальные env для helper:
+
+- `T2_API_TOKEN` (или `T2_ACCESS_TOKEN`)
+- `AI_GATEWAY_SHARED_SECRET`
+- `INGEST_SHARED_SECRET` (если включён auth на `/api/process-call`)
+
+По умолчанию helper использует:
+
+- Tele2 base URL: `https://ats2.t2.ru/crm/openapi`
+- Auth scheme: `Authorization: <token>` (`plain`)
+- ai-gateway URL: `http://127.0.0.1:3001`
+- process-call URL: `http://127.0.0.1:3000/api/process-call`
+
+Helper:
+- скачивает `mp3` через `GET /call-records/file?filename=...`
+- пытается найти metadata звонка через `GET /call-records/info`
+- транскрибирует аудио через `ai-gateway /transcribe` (upstream: Polza)
+- отправляет canonical payload в `POST /api/process-call`
+
 ### Integration assumptions (до подтверждения Tele2 contract)
 
 - финальная Tele2 webhook/schema **не зафиксирована** в runtime

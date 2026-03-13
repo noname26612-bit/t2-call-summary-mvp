@@ -1,4 +1,8 @@
+const crypto = require('crypto');
+const fs = require('fs');
 const OpenAI = require('openai');
+const os = require('os');
+const path = require('path');
 
 const ANALYSIS_CATEGORIES = Object.freeze([
   'продажа',
@@ -17,6 +21,8 @@ const MAX_TEXT_LENGTH = Object.freeze({
   outcome: 180,
   nextStep: 180
 });
+
+const MAX_TRANSCRIBE_AUDIO_BYTES = 20 * 1024 * 1024;
 
 const ANALYSIS_SCHEMA = {
   type: 'object',
@@ -210,6 +216,134 @@ function normalizeAndValidateAnalysis(raw) {
   return normalized;
 }
 
+function createPolzaClient(config) {
+  if (!config || !isNonEmptyString(config.apiKey)) {
+    throw new OpenAIClientError(
+      'POLZA_API_KEY is required',
+      500,
+      'POLZA_MISSING_API_KEY'
+    );
+  }
+
+  const client = new OpenAI({
+    apiKey: config.apiKey.trim(),
+    baseURL: isNonEmptyString(config.baseUrl) ? config.baseUrl.trim() : undefined,
+    timeout: config.timeoutMs
+  });
+
+  return {
+    client,
+    analyzeModel: isNonEmptyString(config.model) ? config.model.trim() : 'gpt-4.1-mini',
+    transcribeModel: isNonEmptyString(config.transcribeModel)
+      ? config.transcribeModel.trim()
+      : 'whisper-1'
+  };
+}
+
+function normalizeTranscriptionText(raw) {
+  if (!isNonEmptyString(raw)) {
+    return '';
+  }
+
+  return raw.replace(/\s+/g, ' ').trim();
+}
+
+function decodeAudioBase64(rawAudioBase64) {
+  if (!isNonEmptyString(rawAudioBase64)) {
+    throw new OpenAIClientError(
+      'audioBase64 is required and must be a non-empty string',
+      400,
+      'TRANSCRIBE_VALIDATION_FAILED'
+    );
+  }
+
+  const withNoPrefix = rawAudioBase64.includes('base64,')
+    ? rawAudioBase64.slice(rawAudioBase64.indexOf('base64,') + 'base64,'.length)
+    : rawAudioBase64;
+
+  const normalized = withNoPrefix.replace(/\s+/g, '');
+  if (!/^[A-Za-z0-9+/=]+$/.test(normalized)) {
+    throw new OpenAIClientError(
+      'audioBase64 contains invalid characters',
+      400,
+      'TRANSCRIBE_VALIDATION_FAILED'
+    );
+  }
+
+  const buffer = Buffer.from(normalized, 'base64');
+  if (!buffer || buffer.length === 0) {
+    throw new OpenAIClientError(
+      'audioBase64 cannot be decoded to non-empty audio bytes',
+      400,
+      'TRANSCRIBE_VALIDATION_FAILED'
+    );
+  }
+
+  if (buffer.length > MAX_TRANSCRIBE_AUDIO_BYTES) {
+    throw new OpenAIClientError(
+      `Audio payload is too large (max ${MAX_TRANSCRIBE_AUDIO_BYTES} bytes)`,
+      413,
+      'TRANSCRIBE_AUDIO_TOO_LARGE'
+    );
+  }
+
+  return buffer;
+}
+
+function resolveTranscriptionFileExtension({ fileName, mimeType }) {
+  const fromName = isNonEmptyString(fileName) ? path.extname(fileName.trim()) : '';
+  const allowed = new Set(['.mp3', '.wav', '.m4a', '.ogg', '.webm', '.mp4', '.mpeg']);
+
+  if (allowed.has(fromName.toLowerCase())) {
+    return fromName.toLowerCase();
+  }
+
+  const normalizedMime = isNonEmptyString(mimeType) ? mimeType.trim().toLowerCase() : '';
+  if (normalizedMime.includes('wav')) {
+    return '.wav';
+  }
+
+  if (normalizedMime.includes('ogg')) {
+    return '.ogg';
+  }
+
+  if (normalizedMime.includes('webm')) {
+    return '.webm';
+  }
+
+  if (normalizedMime.includes('mp4')) {
+    return '.mp4';
+  }
+
+  if (normalizedMime.includes('mpeg') || normalizedMime.includes('mp3')) {
+    return '.mp3';
+  }
+
+  return '.mp3';
+}
+
+function writeAudioBufferToTempFile(audioBuffer, extension) {
+  const tempFilePath = path.join(
+    os.tmpdir(),
+    `ai-gateway-transcribe-${crypto.randomUUID()}${extension}`
+  );
+
+  fs.writeFileSync(tempFilePath, audioBuffer);
+  return tempFilePath;
+}
+
+function safeRemoveFile(filePath) {
+  if (!isNonEmptyString(filePath)) {
+    return;
+  }
+
+  try {
+    fs.unlinkSync(filePath);
+  } catch (error) {
+    // non-critical cleanup failure
+  }
+}
+
 function buildUserPrompt(payload) {
   const lines = [
     'Сформируй структурированный анализ по транскрипту звонка.',
@@ -223,31 +357,14 @@ function buildUserPrompt(payload) {
 }
 
 function createOpenAIAnalyzer(config, logger) {
-  if (!config || !isNonEmptyString(config.apiKey)) {
-    throw new OpenAIClientError(
-      'POLZA_API_KEY is required',
-      500,
-      'POLZA_MISSING_API_KEY'
-    );
-  }
-
-  // Assumption/TODO:
-  // Current implementation expects Polza to be OpenAI-compatible for /chat/completions
-  // and response_format=json_schema. If Polza contract differs, adjust this request shape here.
-  const client = new OpenAI({
-    apiKey: config.apiKey.trim(),
-    baseURL: isNonEmptyString(config.baseUrl) ? config.baseUrl.trim() : undefined,
-    timeout: config.timeoutMs
-  });
-
-  const model = isNonEmptyString(config.model) ? config.model.trim() : 'gpt-4.1-mini';
+  const { client, analyzeModel } = createPolzaClient(config);
 
   return async function analyzeCall(payload) {
     let completion;
 
     try {
       completion = await client.chat.completions.create({
-        model,
+        model: analyzeModel,
         temperature: 0,
         response_format: {
           type: 'json_schema',
@@ -309,7 +426,63 @@ function createOpenAIAnalyzer(config, logger) {
   };
 }
 
+function createOpenAITranscriber(config, logger) {
+  const { client, transcribeModel } = createPolzaClient(config);
+
+  return async function transcribeAudio(payload) {
+    const audioBuffer = decodeAudioBase64(payload?.audioBase64);
+    const extension = resolveTranscriptionFileExtension({
+      fileName: payload?.fileName || '',
+      mimeType: payload?.mimeType || ''
+    });
+    const tempFilePath = writeAudioBufferToTempFile(audioBuffer, extension);
+
+    let response;
+    try {
+      response = await client.audio.transcriptions.create({
+        model: transcribeModel,
+        file: fs.createReadStream(tempFilePath),
+        response_format: 'text'
+      });
+    } catch (error) {
+      throw new OpenAIClientError(
+        sanitizePolzaErrorMessage(error),
+        502,
+        'POLZA_TRANSCRIBE_FAILED'
+      );
+    } finally {
+      safeRemoveFile(tempFilePath);
+    }
+
+    const transcript = normalizeTranscriptionText(
+      typeof response === 'string' ? response : response?.text
+    );
+
+    if (!isNonEmptyString(transcript)) {
+      throw new OpenAIClientError(
+        'Polza returned empty transcription',
+        502,
+        'POLZA_EMPTY_TRANSCRIPTION'
+      );
+    }
+
+    logger.info('polza_transcription_success', {
+      requestId: payload?.requestId || '',
+      transcriptLength: transcript.length,
+      model: transcribeModel,
+      audioBytes: audioBuffer.length
+    });
+
+    return {
+      transcript,
+      model: transcribeModel,
+      audioBytes: audioBuffer.length
+    };
+  };
+}
+
 module.exports = {
   createOpenAIAnalyzer,
+  createOpenAITranscriber,
   OpenAIClientError
 };

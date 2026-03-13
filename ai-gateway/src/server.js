@@ -2,7 +2,11 @@ const express = require('express');
 const dotenv = require('dotenv');
 const { loadConfig, isNonEmptyString } = require('./config');
 const { createLogger, createRequestLoggerMiddleware, serializeError } = require('./logger');
-const { createOpenAIAnalyzer, OpenAIClientError } = require('./openaiClient');
+const {
+  createOpenAIAnalyzer,
+  createOpenAITranscriber,
+  OpenAIClientError
+} = require('./openaiClient');
 
 dotenv.config();
 
@@ -17,6 +21,19 @@ function buildValidationErrors(payload) {
     errors.push({
       field: 'transcript',
       message: 'transcript is required and must be a non-empty string'
+    });
+  }
+
+  return errors;
+}
+
+function buildTranscriptionValidationErrors(payload) {
+  const errors = [];
+
+  if (!isNonEmptyString(payload.audioBase64)) {
+    errors.push({
+      field: 'audioBase64',
+      message: 'audioBase64 is required and must be a non-empty string'
     });
   }
 
@@ -49,7 +66,7 @@ function sendKnownError(res, error, logger, requestId) {
   return res.status(500).json({ error: 'Internal server error' });
 }
 
-function createApp({ config, logger, analyzeCall }) {
+function createApp({ config, logger, analyzeCall, transcribeAudio }) {
   const app = express();
 
   app.disable('x-powered-by');
@@ -97,7 +114,51 @@ function createApp({ config, logger, analyzeCall }) {
     }
   });
 
+  app.post('/transcribe', async (req, res) => {
+    if (!isAuthorized(req, config.gatewaySharedSecret)) {
+      logger.warn('gateway_auth_failed', {
+        requestId: req.requestId,
+        route: '/transcribe'
+      });
+
+      return res.status(401).json({
+        error: 'Unauthorized',
+        code: 'UNAUTHORIZED'
+      });
+    }
+
+    const payload = req.body || {};
+    const validationErrors = buildTranscriptionValidationErrors(payload);
+
+    if (validationErrors.length > 0) {
+      return res.status(400).json({
+        error: 'Validation error',
+        details: validationErrors
+      });
+    }
+
+    try {
+      const response = await transcribeAudio({
+        requestId: normalizeOptionalString(payload.requestId) || req.requestId,
+        audioBase64: payload.audioBase64.trim(),
+        fileName: normalizeOptionalString(payload.fileName),
+        mimeType: normalizeOptionalString(payload.mimeType)
+      });
+
+      return res.status(200).json(response);
+    } catch (error) {
+      return sendKnownError(res, error, logger, req.requestId);
+    }
+  });
+
   app.use((err, req, res, next) => {
+    if (err && err.type === 'entity.too.large') {
+      return res.status(413).json({
+        error: 'Request body is too large',
+        code: 'PAYLOAD_TOO_LARGE'
+      });
+    }
+
     if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
       return res.status(400).json({ error: 'Invalid JSON body' });
     }
@@ -177,18 +238,24 @@ function bootstrap() {
     config.openai,
     logger.child({ component: 'openai_client' })
   );
+  const transcribeAudio = createOpenAITranscriber(
+    config.openai,
+    logger.child({ component: 'openai_transcriber' })
+  );
 
   const app = createApp({
     config,
     logger,
-    analyzeCall
+    analyzeCall,
+    transcribeAudio
   });
 
   const server = app.listen(config.port, () => {
     logger.info('server_started', {
       port: config.port,
       nodeEnv: config.nodeEnv,
-      model: config.openai.model
+      model: config.openai.model,
+      transcribeModel: config.openai.transcribeModel
     });
   });
 
