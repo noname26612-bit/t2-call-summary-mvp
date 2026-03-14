@@ -89,11 +89,23 @@ Source of truth for current YC deploy progress and fixed decisions:
     - [x] `systemd` one-shot service + timer templates
     - [x] минимальный ops runbook (install/run/status/logs/stop/rollback)
     - [x] safe starter defaults: `15m`, `lookback=60`, `maxCandidates=10`, `timeoutMs=180000`
-  - [ ] 8.17 Выполнить controlled VM rollout scheduler:
-    - [ ] установить `t2-tele2-poll.service` и `t2-tele2-poll.timer`
-    - [ ] проверить первый ручной service run
-    - [ ] проверить timer trigger и отсутствие overlap
-    - [ ] зафиксировать dry-run/live результат и dedup стабильность
+  - [x] 8.17 Выполнить controlled VM rollout scheduler:
+    - [x] установить `t2-tele2-poll.service` и `t2-tele2-poll.timer`
+    - [x] проверить первый ручной service run
+    - [x] проверить timer trigger и отсутствие overlap
+    - [x] зафиксировать dry-run/live результат и dedup стабильность
+  - [ ] 8.18 Добавить token refresh lifecycle для scheduled polling:
+    - [x] добавить helper `scripts/refresh-tele2-token.sh` (Tele2 refresh endpoint + response validation)
+    - [x] добавить atomic update + backup для `/opt/t2-call-summary/tele2-poll.env` (`T2_API_TOKEN`, `T2_REFRESH_TOKEN`)
+    - [x] встроить preflight refresh в `scripts/run-tele2-poll-once.sh` по expiry window
+    - [x] встроить controlled `403 -> refresh -> one retry` в wrapper
+    - [ ] выкатить обновлённый wrapper/helper на VM
+    - [ ] подтвердить refresh flow на VM и зафиксировать результат в `DEPLOY_PROGRESS.md`
+  - [ ] 8.19 Закрыть operational риск роста poller file log:
+    - [x] добавить `ops/logrotate/t2-tele2-poll` template
+    - [x] описать install/verify шаги в README
+    - [ ] установить logrotate config на VM
+    - [ ] подтвердить forced rotation + retention
 
 ## Контрольные follow-up задачи
 

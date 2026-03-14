@@ -141,11 +141,25 @@ These decisions are considered fixed unless explicitly changed:
   - candidate `openai/whisper-1` tested on sample and rejected for production switch (`success=0 / empty=8 / failed=2`)
 - scheduled poll-once ops assets prepared in repository (no webhook/cutover changes):
   - VM wrapper with overlap lock: `scripts/run-tele2-poll-once.sh`
+  - VM token refresh helper: `scripts/refresh-tele2-token.sh`
   - systemd unit templates: `ops/systemd/t2-tele2-poll.service`, `ops/systemd/t2-tele2-poll.timer`
   - optional VM env template: `ops/systemd/tele2-poll.env.example`
   - safe starter profile fixed for timer rollout: interval 15m, lookback 60m, max candidates 10, timeout 180000 ms
   - service timeout guard set (`TimeoutStartSec=0`) to avoid systemd killing long polling runs
-  - wrapper logs are JSON-lines with explicit exit code semantics (`0`, `2`, propagated poll exit code)
+  - wrapper logs are JSON-lines with explicit exit code semantics (`0`, `2`, `3`, propagated poll exit code)
+- scheduled poll-once rollout on VM is enabled and validated:
+  - timer enabled and trigger confirmed
+  - overlap protection confirmed
+  - dry-run/live/dedup behavior confirmed under scheduled profile
+- Tele2 token refresh hardening prepared for scheduler wrapper:
+  - preflight refresh based on access token expiry window
+  - one controlled refresh + one controlled retry on Tele2 auth `403`
+  - atomic env update for `T2_API_TOKEN` and `T2_REFRESH_TOKEN` with backup
+  - refresh helper does not log token values
+- poller file-log growth hardening prepared:
+  - added logrotate config template `ops/logrotate/t2-tele2-poll`
+  - keeps journal logging unchanged
+  - rotates/compresses `/home/artem266/t2-call-summary-mvp/logs/tele2-poll-once.log` with limited retention
 
 ## Current production image tags (active)
 
@@ -170,7 +184,8 @@ Tele2 adapter is deployed to production with flag off and validated.
 Tele2 pull route (`call-records/info`, `call-records/file`) and manual STT bridge E2E are validated.
 Tele2 one-shot polling MVP is validated on VM (`dry-run`, `live-run`, `dedup`).
 Multipart transcription path for long audio is validated in production.
-Next narrow milestone: enable scheduled `tele2:poll-once` on VM via systemd service/timer (with overlap lock and safe defaults), then verify dry-run/live cadence.
+Scheduled `tele2:poll-once` rollout via systemd service/timer is enabled and validated on VM.
+Next narrow milestone: rollout and verify token refresh + log rotation hardening on VM (without architecture changes).
 
 ## Runtime naming status
 
@@ -187,17 +202,21 @@ Status:
 
 ## Next steps
 
-1. Install and enable `t2-tele2-poll.service` + `t2-tele2-poll.timer` on VM with safe starter profile (15m / 60m lookback / max 10 / 180000 ms timeout).
-2. Verify scheduler rollout on VM (`systemctl status`, `journalctl`, poll log file, dry-run/live behavior, dedup stability).
-3. Rotate the exposed Polza API key if it has not already been rotated after local testing, then re-run a short production smoke.
+1. Deploy refresh-enabled wrapper/helper to VM and set `T2_REFRESH_TOKEN` in `/opt/t2-call-summary/tele2-poll.env`.
+2. Install `ops/logrotate/t2-tele2-poll` on VM (`/etc/logrotate.d/t2-tele2-poll`) and verify forced rotation once.
+3. Verify refresh lifecycle on VM (`preflight refresh`, `403 -> refresh -> one retry`) and confirm no token leakage in logs.
 4. Keep `TELE2_INGEST_ENABLED=false` until Tele2 webhook payload contract is confirmed and explicitly approved for controlled cutover.
-5. Keep lightweight monitoring checks running during scheduled poll-once operations.
+5. Rotate the exposed Polza API key if it has not already been rotated after local testing, then re-run a short production smoke.
+6. Keep lightweight monitoring checks running during scheduled poll-once operations.
 
 ## Open checks
 
 - verify request timeout and retries are acceptable for real call volume
 - confirm and document timeout policy for long records (`--timeout-ms 180000` validated for manual long-record run)
 - verify systemd timer overlap guard behavior (`flock`) under delayed/long runs
+- verify token refresh behavior under expired/invalid access token scenario on VM
+- define operational cadence for Tele2 refresh token rotation
+- verify logrotate execution cadence and retention on VM
 - rotate exposed Polza API key and any exposed development credentials before full production traffic
 - verify final provider/model naming in runtime env and docs
 - confirm exact Tele2 payload contract (field locations + datetime format + transcript size)
