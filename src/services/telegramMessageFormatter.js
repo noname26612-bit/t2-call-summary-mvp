@@ -74,6 +74,14 @@ function normalizeScenarioToken(value) {
   return normalizeSingleLine(value).toLowerCase().replace(/[\s-]+/g, '_');
 }
 
+function normalizeForContains(value) {
+  return normalizeSingleLine(value)
+    .toLowerCase()
+    .replace(/["'«»]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function formatCallDateTime(callDateTime, timeZone) {
   const date = parseDateOrNull(callDateTime);
   if (!date) {
@@ -175,18 +183,82 @@ function sentenceChunks(value) {
     .filter((chunk) => chunk !== '');
 }
 
-function buildWantedLines(analysis) {
+function lineLooksLikeStatus(rawLine) {
+  const line = normalizeSingleLine(rawLine).toLowerCase();
+  if (!line) {
+    return false;
+  }
+
+  return (
+    /^результат[:\s]/.test(line) ||
+    /^статус[:\s]/.test(line) ||
+    /^следующий шаг[:\s]/.test(line) ||
+    /^(заявка|запрос)\s+(принят|принята|зафиксирован|зафиксирована)\b/.test(line) ||
+    /требуется\s+дальнейшая\s+обработк/.test(line) ||
+    /ключевые\s+детали\s+уточняются/.test(line)
+  );
+}
+
+function isCompanyMentionedInText(wantedText, companyName) {
+  const textToken = normalizeForContains(wantedText);
+  const companyToken = normalizeForContains(companyName);
+  if (!textToken || !companyToken) {
+    return false;
+  }
+
+  return textToken.includes(companyToken);
+}
+
+function isOrderMentionedInText(wantedText, orderNumber) {
+  const textToken = normalizeForContains(wantedText);
+  const orderToken = normalizeForContains(orderNumber);
+  if (!textToken || !orderToken) {
+    return false;
+  }
+
+  if (textToken.includes(orderToken)) {
+    return true;
+  }
+
+  const orderDigits = orderNumber.replace(/\D/g, '');
+  if (orderDigits.length < 2) {
+    return false;
+  }
+
+  return textToken.replace(/\D/g, '').includes(orderDigits);
+}
+
+function appendOptionalDetailsToWantedText(wantedText, { companyName, orderNumber }) {
+  const appendCompany = companyName && !isCompanyMentionedInText(wantedText, companyName);
+  const appendOrder = orderNumber && !isOrderMentionedInText(wantedText, orderNumber);
+
+  if (!appendCompany && !appendOrder) {
+    return wantedText;
+  }
+
+  let suffix = '';
+
+  if (appendCompany && appendOrder) {
+    suffix = `Компания ${companyName}, номер заказа ${orderNumber}.`;
+  } else if (appendCompany) {
+    suffix = `Компания ${companyName}.`;
+  } else if (appendOrder) {
+    suffix = `Номер заказа ${orderNumber}.`;
+  }
+
+  const separator = /[.!?]\s*$/.test(wantedText) ? ' ' : '. ';
+  return normalizeSingleLine(`${wantedText}${separator}${suffix}`);
+}
+
+function buildWantedText(analysis, { companyName, orderNumber }) {
   const fromWantedSummary = normalizeWantedLines(analysis?.wantedSummary);
   const fallbackCandidates = [
     ...sentenceChunks(analysis?.summary),
-    ...sentenceChunks(analysis?.result)
+    ...sentenceChunks(analysis?.topic)
   ];
 
-  const merged = [...fromWantedSummary];
-  if (fromWantedSummary.length < 2) {
-    merged.push(...fallbackCandidates);
-  }
-  const lines = [];
+  const merged = fromWantedSummary.length > 0 ? fromWantedSummary : fallbackCandidates;
+  const unique = [];
   const seen = new Set();
 
   for (const line of merged) {
@@ -195,57 +267,38 @@ function buildWantedLines(analysis) {
       continue;
     }
 
-    lines.push(line);
+    unique.push(line);
     seen.add(key);
-    if (lines.length >= 4) {
-      break;
-    }
   }
 
-  if (lines.length === 0) {
-    return ['Запрос клиента зафиксирован.', 'Ключевые детали уточняются.'];
+  const withoutStatusLines = unique.filter((line) => !lineLooksLikeStatus(line));
+  const selected = (withoutStatusLines.length > 0 ? withoutStatusLines : unique).slice(0, 2);
+
+  let wantedText = selected.join(' ');
+  if (!wantedText) {
+    wantedText = normalizeSingleLine(analysis?.summary) || 'Запрос клиента зафиксирован.';
   }
 
-  if (lines.length === 1) {
-    lines.push('Ключевые детали уточняются.');
-  }
-
-  return lines.slice(0, 4);
+  return appendOptionalDetailsToWantedText(wantedText, { companyName, orderNumber });
 }
 
 function formatTelegramCallSummary({ phone, callDateTime, analysis, timeZone = 'Europe/Moscow' } = {}) {
   const normalizedAnalysis = isPlainObject(analysis) ? analysis : {};
   const primaryScenario = resolvePrimaryScenario(normalizedAnalysis);
-  const wantedLines = buildWantedLines(normalizedAnalysis);
   const phoneText = normalizeSingleLine(phone) || EMPTY_VALUE;
   const dateTimeText = formatCallDateTime(callDateTime, timeZone);
   const companyName = normalizeOptionalText(normalizedAnalysis.companyName);
   const orderNumber = normalizeOptionalText(normalizedAnalysis.orderNumber);
+  const wantedText = buildWantedText(normalizedAnalysis, { companyName, orderNumber });
 
   const lines = [
     `Кто звонил: ${phoneText}`,
     `Когда звонил: ${dateTimeText}`,
-    `Что хотели: ${wantedLines[0]}`
+    '',
+    `Что хотели: ${wantedText}`,
+    '',
+    `Категория: ${primaryScenario}`
   ];
-
-  for (const line of wantedLines.slice(1)) {
-    lines.push(line);
-  }
-
-  lines.push('');
-  lines.push(`Сценарий: ${primaryScenario}`);
-
-  if (companyName || orderNumber) {
-    lines.push('');
-  }
-
-  if (companyName) {
-    lines.push(`Компания: ${companyName}`);
-  }
-
-  if (orderNumber) {
-    lines.push(`Номер заказа: ${orderNumber}`);
-  }
 
   while (lines.length > 0 && lines[lines.length - 1] === '') {
     lines.pop();

@@ -20,10 +20,13 @@ const BASE_ANALYSIS = {
 
 const FORBIDDEN_SNIPPETS = [
   'Следующий шаг:',
-  'Категория:',
+  'Сценарий:',
+  'Компания:',
+  'Номер заказа:',
   'Тема:',
   'Сводка:',
   'Результат:',
+  'Статус:',
   'Просили запчасти:',
   'Просили аренду:',
   'Просили ремонт:',
@@ -46,9 +49,9 @@ const CASES = [
       orderNumber: '№100'
     },
     expected: {
-      scenario: 'Запчасти',
-      hasCompany: true,
-      hasOrderNumber: true
+      category: 'Запчасти',
+      wantedMustContain: ['ООО "Станок 77"'],
+      wantedMustMatch: [/номер заказа\s*(№\s*)?100/i]
     }
   },
   {
@@ -65,9 +68,7 @@ const CASES = [
       rentalAddress: 'Москва, ул. Большая Морская, 3'
     },
     expected: {
-      scenario: 'Аренда',
-      hasCompany: false,
-      hasOrderNumber: false,
+      category: 'Аренда',
       rentalStartEquals: '17.03.2026'
     }
   },
@@ -83,9 +84,7 @@ const CASES = [
       rentalStart: '29.03.2026'
     },
     expected: {
-      scenario: 'Аренда',
-      hasCompany: false,
-      hasOrderNumber: false,
+      category: 'Аренда',
       rentalStartContains: 'примерно через 2-3 недели'
     }
   },
@@ -105,9 +104,7 @@ const CASES = [
       orderNumber: '№100'
     },
     expected: {
-      scenario: 'Ремонт',
-      hasCompany: false,
-      hasOrderNumber: false,
+      category: 'Ремонт',
       companyDropped: true,
       orderDropped: true
     }
@@ -124,9 +121,7 @@ const CASES = [
       deliveryDetails: 'до 20:00, разгрузка на складе клиента'
     },
     expected: {
-      scenario: 'Доставка',
-      hasCompany: false,
-      hasOrderNumber: false
+      category: 'Доставка'
     }
   },
   {
@@ -140,9 +135,7 @@ const CASES = [
       result: 'Нужно уточнение деталей.'
     },
     expected: {
-      scenario: 'Другое',
-      hasCompany: false,
-      hasOrderNumber: false
+      category: 'Другое'
     }
   }
 ];
@@ -150,7 +143,7 @@ const CASES = [
 function validateMessage({ title, message, normalized, expected }) {
   const errors = [];
 
-  for (const prefix of ['Кто звонил:', 'Когда звонил:', 'Что хотели:', 'Сценарий:']) {
+  for (const prefix of ['Кто звонил:', 'Когда звонил:', 'Что хотели:', 'Категория:']) {
     if (!message.includes(prefix)) {
       errors.push(`${title}: missing required field "${prefix}"`);
     }
@@ -162,19 +155,20 @@ function validateMessage({ title, message, normalized, expected }) {
     }
   }
 
-  if (!message.includes(`Сценарий: ${expected.scenario}`)) {
-    errors.push(`${title}: expected scenario "${expected.scenario}"`);
+  if (!message.includes(`Категория: ${expected.category}`)) {
+    errors.push(`${title}: expected category "${expected.category}"`);
   }
 
-  const hasCompanyLine = message.includes('\nКомпания: ');
-  const hasOrderLine = message.includes('\nНомер заказа: ');
-
-  if (expected.hasCompany !== hasCompanyLine) {
-    errors.push(`${title}: company line mismatch (expected ${expected.hasCompany}, got ${hasCompanyLine})`);
+  if (!/Когда звонил:[^\n]*\n\nЧто хотели:/m.test(message)) {
+    errors.push(`${title}: expected empty line between "Когда звонил" and "Что хотели"`);
   }
 
-  if (expected.hasOrderNumber !== hasOrderLine) {
-    errors.push(`${title}: order line mismatch (expected ${expected.hasOrderNumber}, got ${hasOrderLine})`);
+  if (!/Что хотели:[\s\S]*\n\nКатегория:/m.test(message)) {
+    errors.push(`${title}: expected empty line between "Что хотели" and "Категория"`);
+  }
+
+  if (message.includes('\nКомпания: ') || message.includes('\nНомер заказа: ')) {
+    errors.push(`${title}: company/order must stay inside "Что хотели", not separate lines`);
   }
 
   if (expected.rentalStartEquals && normalized.rentalStart !== expected.rentalStartEquals) {
@@ -193,6 +187,22 @@ function validateMessage({ title, message, normalized, expected }) {
 
   if (expected.orderDropped && Object.prototype.hasOwnProperty.call(normalized, 'orderNumber')) {
     errors.push(`${title}: orderNumber should be dropped when not explicit in transcript`);
+  }
+
+  if (Array.isArray(expected.wantedMustContain)) {
+    for (const token of expected.wantedMustContain) {
+      if (!message.includes(token)) {
+        errors.push(`${title}: "Что хотели" should contain "${token}"`);
+      }
+    }
+  }
+
+  if (Array.isArray(expected.wantedMustMatch)) {
+    for (const pattern of expected.wantedMustMatch) {
+      if (!pattern.test(message)) {
+        errors.push(`${title}: "Что хотели" should match ${pattern}`);
+      }
+    }
   }
 
   return errors;
