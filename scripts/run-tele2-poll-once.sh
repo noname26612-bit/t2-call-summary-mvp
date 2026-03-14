@@ -29,6 +29,7 @@ TOKEN_REFRESH_HELPER="${TELE2_POLL_TOKEN_REFRESH_HELPER:-${PROJECT_DIR}/scripts/
 
 EXIT_CONFIG_ERROR=2
 EXIT_REFRESH_ERROR=3
+EXIT_AUTH_ENV_ERROR=4
 RUN_FINISHED=0
 LAST_RUN_OUTPUT_FILE=""
 
@@ -137,6 +138,59 @@ resolve_env_value() {
   printf '%s' "$fallback"
 }
 
+resolve_env_source() {
+  local key="$1"
+  local value="${!key-}"
+
+  if [ -n "$value" ]; then
+    printf 'process_env'
+    return 0
+  fi
+
+  value="$(read_env_value "$POLL_ENV_FILE" "$key")"
+  if [ -n "$value" ]; then
+    printf 'poll_env'
+    return 0
+  fi
+
+  value="$(read_env_value "$MAIN_ENV_FILE" "$key")"
+  if [ -n "$value" ]; then
+    printf 'main_env'
+    return 0
+  fi
+
+  printf 'missing'
+}
+
+resolve_access_token_value() {
+  local token
+  token="$(resolve_env_value "T2_API_TOKEN" "")"
+  if [ -n "$token" ]; then
+    printf '%s' "$token"
+    return 0
+  fi
+
+  token="$(resolve_env_value "T2_ACCESS_TOKEN" "")"
+  printf '%s' "$token"
+}
+
+resolve_access_token_source() {
+  local source
+  source="$(resolve_env_source "T2_API_TOKEN")"
+  if [ "$source" != "missing" ]; then
+    printf 'T2_API_TOKEN:%s' "$source"
+    return 0
+  fi
+
+  source="$(resolve_env_source "T2_ACCESS_TOKEN")"
+  if [ "$source" != "missing" ]; then
+    printf 'T2_ACCESS_TOKEN:%s' "$source"
+    return 0
+  fi
+
+  printf 'missing'
+}
+
 access_token_exp_epoch() {
   local token="$1"
   python3 - "$token" <<'PY'
@@ -166,36 +220,39 @@ print(int(exp))
 PY
 }
 
-is_access_token_expiring_soon() {
-  local leeway_seconds="$1"
-  local access_token
-  access_token="$(resolve_env_value "T2_API_TOKEN" "")"
-
-  if [ -z "$access_token" ]; then
-    access_token="$(resolve_env_value "T2_ACCESS_TOKEN" "")"
-  fi
-
-  if [ -z "$access_token" ]; then
-    return 2
+access_token_lifecycle_state() {
+  local token="$1"
+  local leeway_seconds="$2"
+  if [ -z "$token" ]; then
+    printf 'missing'
+    return 0
   fi
 
   local expires_at
-  if ! expires_at="$(access_token_exp_epoch "$access_token" 2>/dev/null)"; then
-    return 2
+  if ! expires_at="$(access_token_exp_epoch "$token" 2>/dev/null)"; then
+    printf 'invalid'
+    return 0
   fi
 
   if ! [[ "$expires_at" =~ ^[0-9]+$ ]]; then
-    return 2
+    printf 'invalid'
+    return 0
   fi
 
   local now
   now="$(date +%s)"
 
   if [ "$expires_at" -le $((now + leeway_seconds)) ]; then
+    if [ "$expires_at" -le "$now" ]; then
+      printf 'expired'
+      return 0
+    fi
+
+    printf 'expiring_soon'
     return 0
   fi
 
-  return 1
+  printf 'valid'
 }
 
 run_refresh_helper() {
@@ -219,8 +276,8 @@ run_refresh_helper() {
   local refresh_token
   refresh_token="$(resolve_env_value "T2_REFRESH_TOKEN" "")"
   if [ -z "$refresh_token" ]; then
-    log_json "warn" "token_refresh_skipped_missing_refresh_token" "envFile" "$POLL_ENV_FILE"
-    return 1
+    log_json "error" "token_refresh_skipped_missing_refresh_token" "envFile" "$POLL_ENV_FILE"
+    return "$EXIT_AUTH_ENV_ERROR"
   fi
 
   log_json "info" "token_refresh_started" "reason" "$reason" "envFile" "$POLL_ENV_FILE"
@@ -237,6 +294,55 @@ run_refresh_helper() {
 
   log_json "error" "token_refresh_failed" "reason" "$reason" "exitCode" "$refresh_exit_code"
   return "$EXIT_REFRESH_ERROR"
+}
+
+validate_t2_auth_env() {
+  local access_token access_source refresh_token refresh_source access_state
+  access_token="$(resolve_access_token_value)"
+  access_source="$(resolve_access_token_source)"
+  refresh_token="$(resolve_env_value "T2_REFRESH_TOKEN" "")"
+  refresh_source="$(resolve_env_source "T2_REFRESH_TOKEN")"
+
+  if [ -z "$access_token" ]; then
+    log_json "error" "t2_api_token_missing" \
+      "acceptedKeys" "T2_API_TOKEN,T2_ACCESS_TOKEN" \
+      "mainEnvFile" "$MAIN_ENV_FILE" \
+      "pollEnvFile" "$POLL_ENV_FILE"
+  fi
+
+  if [ -z "$refresh_token" ]; then
+    log_json "error" "t2_refresh_token_missing" \
+      "key" "T2_REFRESH_TOKEN" \
+      "mainEnvFile" "$MAIN_ENV_FILE" \
+      "pollEnvFile" "$POLL_ENV_FILE"
+  fi
+
+  if [ -z "$access_token" ] || [ -z "$refresh_token" ]; then
+    log_json "error" "t2_auth_env_validation_failed" \
+      "missingAccessToken" "$([ -z "$access_token" ] && printf 'true' || printf 'false')" \
+      "missingRefreshToken" "$([ -z "$refresh_token" ] && printf 'true' || printf 'false')"
+    RUN_FINISHED=1
+    exit "$EXIT_AUTH_ENV_ERROR"
+  fi
+
+  access_state="$(access_token_lifecycle_state "$access_token" "$TOKEN_REFRESH_LEEWAY_SECONDS")"
+  log_json "info" "t2_auth_env_validated" \
+    "accessTokenSource" "$access_source" \
+    "refreshTokenSource" "$refresh_source" \
+    "accessTokenState" "$access_state" \
+    "accessTokenLength" "${#access_token}" \
+    "refreshTokenLength" "${#refresh_token}"
+
+  if [ "$access_state" = "invalid" ]; then
+    log_json "warn" "t2_api_token_invalid_or_unparseable" "accessTokenSource" "$access_source"
+  fi
+
+  if [ "$access_state" = "expired" ] && [ "$TOKEN_REFRESH_ENABLED" != 'true' ]; then
+    log_json "error" "t2_api_token_expired_refresh_disabled" \
+      "tokenRefreshEnabled" "$TOKEN_REFRESH_ENABLED"
+    RUN_FINISHED=1
+    exit "$EXIT_AUTH_ENV_ERROR"
+  fi
 }
 
 run_output_has_t2_auth_403() {
@@ -389,10 +495,17 @@ fi
 
 env_file_args=(--env-file "$MAIN_ENV_FILE")
 if [ -f "$POLL_ENV_FILE" ]; then
+  if [ ! -r "$POLL_ENV_FILE" ]; then
+    log_json "error" "poll_env_not_readable" "path" "$POLL_ENV_FILE"
+    RUN_FINISHED=1
+    exit "$EXIT_AUTH_ENV_ERROR"
+  fi
   env_file_args+=(--env-file "$POLL_ENV_FILE")
 else
   log_json "info" "optional_env_missing_continue" "path" "$POLL_ENV_FILE"
 fi
+
+validate_t2_auth_env
 
 if [ ! -d "$PROJECT_DIR/node_modules" ]; then
   log_json "info" "node_modules_missing_install" "projectDir" "$PROJECT_DIR"
@@ -435,18 +548,24 @@ if [ "$#" -gt 0 ]; then
 fi
 
 if [ "$TOKEN_REFRESH_ENABLED" = 'true' ]; then
-  if is_access_token_expiring_soon "$TOKEN_REFRESH_LEEWAY_SECONDS"; then
-    log_json "info" "token_refresh_preflight_needed" "reason" "access_token_expiring"
-    if ! run_refresh_helper "preflight_expiring_token"; then
-      log_json "warn" "token_refresh_preflight_failed_continue" "reason" "access_token_expiring"
+  access_token_state="$(access_token_lifecycle_state "$(resolve_access_token_value)" "$TOKEN_REFRESH_LEEWAY_SECONDS")"
+  if [ "$access_token_state" = "expired" ] || [ "$access_token_state" = "expiring_soon" ]; then
+    refresh_reason="preflight_expiring_token"
+    if [ "$access_token_state" = "expired" ]; then
+      refresh_reason="preflight_expired_token"
     fi
+
+    log_json "info" "token_refresh_preflight_needed" "reason" "$refresh_reason"
+    if ! run_refresh_helper "$refresh_reason"; then
+      refresh_exit_code=$?
+      log_json "error" "token_refresh_preflight_failed_abort" "reason" "$refresh_reason" "exitCode" "$refresh_exit_code"
+      RUN_FINISHED=1
+      exit "$refresh_exit_code"
+    fi
+  elif [ "$access_token_state" = "invalid" ]; then
+    log_json "warn" "token_refresh_preflight_skipped" "reason" "access_token_invalid_or_unparseable"
   else
-    expiry_check_status=$?
-    if [ "$expiry_check_status" -eq 2 ]; then
-      log_json "warn" "token_refresh_preflight_skipped" "reason" "access_token_expiry_unknown"
-    else
-      log_json "info" "token_refresh_preflight_not_needed"
-    fi
+    log_json "info" "token_refresh_preflight_not_needed"
   fi
 fi
 

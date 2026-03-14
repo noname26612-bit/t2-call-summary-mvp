@@ -11,7 +11,8 @@ Keep the existing production baseline stable after the confirmed Polza cutover:
 - keep container-to-container routing on user-defined Docker network `t2-app-net`
 - keep PostgreSQL topology unchanged
 - keep Telegram transport/integration unchanged (same bot/chat delivery path)
-- allow only message text format update in the active improvement wave
+- keep `Telegram message format v2` as completed wave #1 result
+- run a narrow post-incident hardening pass for Tele2 poller auth/env and ops access baseline
 - keep `ai-gateway` as the active runtime boundary
 - use Polza as upstream provider
 - do not return the main app runtime to a direct OpenAI path
@@ -36,43 +37,47 @@ These decisions are considered fixed unless explicitly changed:
 - host-level VM health check for gateway: `http://127.0.0.1:3001/healthz`
 - `ai-gateway` is not used as a separate public service
 
-## Active workstream (improvement wave #1)
+## Active workstream (post-incident hardening pass)
 
 Baseline status:
 
 - production baseline is closed and considered stable
-- topology and production routing are fixed for this wave
+- topology and production routing are fixed
+- `Telegram message format v2` rollout is completed
+- production incident on `2026-03-14` is manually mitigated
 
 Active scope in this change set:
 
-- only `Telegram message format v2` is implemented
-- formatter output is plain text only
-- one call -> one primary scenario (`Запчасти`, `Аренда`, `Ремонт`, `Доставка`, safe fallback)
-- required fields in Telegram message:
-  - `Кто звонил`
-  - `Когда звонил`
-  - `Что хотели`
-  - `Сценарий`
-- optional fields:
-  - `Компания` only if explicitly present in conversation
-  - `Номер заказа` only if explicitly present in conversation
+- add fail-fast guard for required poller auth env vars:
+  - `T2_API_TOKEN` (`T2_ACCESS_TOKEN` accepted as backward-compatible fallback)
+  - `T2_REFRESH_TOKEN`
+- add explicit structured logging for auth/env failure classes:
+  - missing access token
+  - missing refresh token
+  - invalid/unparseable access token
+  - expired token when refresh is disabled
+  - preflight refresh failure abort
+- keep a simple, beginner-friendly production verification workflow in docs
+- sync docs/runbooks for incident recovery and SSH/SG baseline access
 
 Explicitly out of scope in this change set:
 
+- Telegram message format changes
 - ignored numbers behavior changes
 - owner routing
 - Telegram buttons
 - polling interval
 - missed-call filtering
 - topology / infrastructure / production baseline changes
-- Tele2 token regeneration proposals
+- provider/gateway refactor
+- Tele2 token regeneration proposals as a "fix first" action
 
 Acceptance criteria for this workstream:
 
-- docs/status synced to the active `Telegram message format v2` scope
-- old `Следующий шаг` block removed from Telegram message
-- scenario `Доставка` is supported as standalone scenario block
-- fuzzy relative date is not converted into invented exact date
+- wrapper does not run with empty Tele2 auth env and exits with explicit reason
+- auth/env failure logs are distinguishable without deep journal parsing
+- docs/status reflect incident root cause and current healthy state
+- docs include exact post-fix verification commands and expected success signatures
 
 ## Already completed
 
@@ -185,7 +190,7 @@ Acceptance criteria for this workstream:
   - optional VM env template: `ops/systemd/tele2-poll.env.example`
   - safe starter profile fixed for timer rollout: interval 15m, lookback 60m, max candidates 10, timeout 180000 ms
   - service timeout guard set (`TimeoutStartSec=0`) to avoid systemd killing long polling runs
-  - wrapper logs are JSON-lines with explicit exit code semantics (`0`, `2`, `3`, propagated poll exit code)
+  - wrapper logs are JSON-lines with explicit exit code semantics (`0`, `2`, `3`, `4`, propagated poll exit code)
 - scheduled poll-once rollout on VM is enabled and validated:
   - timer enabled and trigger confirmed
   - overlap protection confirmed
@@ -195,10 +200,47 @@ Acceptance criteria for this workstream:
   - one controlled refresh + one controlled retry on Tele2 auth `403`
   - atomic env update for `T2_API_TOKEN` and `T2_REFRESH_TOKEN` with backup
   - refresh helper does not log token values
+- post-incident poller env/auth hardening implemented in repository:
+  - fail-fast validation for required `T2_API_TOKEN`/`T2_REFRESH_TOKEN`
+  - explicit auth-env error signatures before docker poll run
+  - early guard for unreadable poll env file (`/opt/t2-call-summary/tele2-poll.env`)
+  - dedicated auth-env misconfiguration exit code (`4`)
 - poller file-log growth hardening prepared:
   - added logrotate config template `ops/logrotate/t2-tele2-poll`
   - keeps journal logging unchanged
   - rotates/compresses `/home/artem266/t2-call-summary-mvp/logs/tele2-poll-once.log` with limited retention
+
+## Incident note (`2026-03-14`)
+
+Symptom observed:
+
+- `t2-tele2-poll.timer` remained active and triggering
+- `t2-tele2-poll.service` repeatedly failed
+- logs contained repeated auth failures (`403`, `poll_once_failed`, `token_refresh_skipped_missing_refresh_token`)
+- Telegram summaries stopped because poller could not pass Tele2 auth
+
+Root cause:
+
+- missing/invalid token pair in `/opt/t2-call-summary/tele2-poll.env`:
+  - `T2_API_TOKEN`
+  - `T2_REFRESH_TOKEN`
+
+Parallel ops issue:
+
+- SSH ingress in `sg-t2-vm` allowed only a different operator IP, which delayed direct access for recovery
+
+Mitigation (already done manually):
+
+- restored valid Tele2 token pair in production env
+- corrected env-file ownership/permissions so wrapper user can read it
+- reran poller and confirmed successful pass
+- restored normal SSH access path for current operator IP
+
+Current state after mitigation:
+
+- `t2-tele2-poll.timer` is `active (waiting)`
+- poller has successful run: `2026-03-14 20:06:38 UTC` (`exitCode=0`)
+- no new `403`/`missing_refresh_token` signatures after fix window
 
 ## Current production image tags (active)
 
@@ -226,8 +268,9 @@ Multipart transcription path for long audio is validated in production.
 Scheduled `tele2:poll-once` rollout via systemd service/timer is enabled and validated on VM.
 Current narrow milestone in post-baseline improvements wave #1:
 
-- implement and verify only `Telegram message format v2`
-- keep all non-format improvements out of scope for this change set
+- keep `Telegram message format v2` as completed milestone
+- execute a narrow post-incident hardening pass for Tele2 poller auth/env and ops access baseline
+- keep all topology/provider/routing changes out of scope
 
 ## Operational warning (Tele2 tokens)
 
@@ -255,17 +298,22 @@ Status:
 
 ## Next steps
 
-1. Sync docs/status files for active improvement wave #1 (`DEPLOY_PROGRESS.md`, `TASKS.md`, `README.md`).
-2. Roll out canonical Telegram plain-text format v2 in runtime formatter and minimal AI extraction fields.
-3. Verify locally across scenarios (`Запчасти`, `Аренда`, `Ремонт`, `Доставка`) and confirm optional fields behavior.
-4. Keep baseline protections unchanged: no topology changes, no routing changes, no polling/ignored/routing/button changes.
+1. Roll out poller hardening changes (fail-fast auth/env guards + explicit logs) to VM.
+2. Run production post-fix verification sequence:
+   - service/timer status
+   - journal error signatures absent
+   - successful `poll_once_finished` with `exitCode=0`
+3. Keep SSH baseline stable (`sg-t2-vm` ingress policy + known-good operator access path).
+4. Keep baseline protections unchanged: no topology changes, no routing changes, no polling interval/ignored numbers/owner routing/buttons changes.
 
 ## Open checks
 
 - verify request timeout and retries are acceptable for real call volume
 - confirm and document timeout policy for long records (`--timeout-ms 180000` validated for manual long-record run)
 - verify systemd timer overlap guard behavior (`flock`) under delayed/long runs
-- verify token refresh behavior under expired/invalid access token scenario on VM
+- verify token refresh behavior under expired/invalid access token scenario on VM after hardening deploy
+- verify poller hardening exit codes and log signatures on VM (`2/3/4` paths)
+- confirm SG allowlist policy for SSH and document operator fallback path (serial console)
 - define operational cadence for Tele2 refresh token rotation
 - verify logrotate execution cadence and retention on VM
 - rotate exposed Polza API key and any exposed development credentials before full production traffic

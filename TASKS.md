@@ -2,7 +2,7 @@
 
 > Each task should be executed with step-by-step validation instructions because the project is being implemented by the user for the first time.
 
-## Active workstream (post-baseline improvements, wave #1)
+## Active workstream (post-incident hardening, `2026-03-14`)
 
 Source of truth for current YC deploy progress and fixed decisions:
 `DEPLOY_PROGRESS.md`
@@ -11,19 +11,24 @@ Current status:
 
 - [x] Production baseline is closed and stabilized
 - [x] Improvement wave #1 is activated
-- [x] Scope for this change set is strictly limited to `Telegram message format v2`
+- [x] `Telegram message format v2` rollout is completed
+- [x] Production incident root cause is localized (`T2_API_TOKEN` / `T2_REFRESH_TOKEN` in poller env)
+- [x] Manual mitigation is completed (token pair restored, poller success, SSH access restored)
 
-Wave #1 checklist (`Telegram message format v2` only):
+Hardening checklist (this change set only):
 
 - [x] Sync status docs (`DEPLOY_PROGRESS.md`, `TASKS.md`, `README.md`)
-- [x] Switch Telegram runtime output to canonical plain-text v2 format
-- [x] Ensure one call maps to one primary scenario (`Запчасти`, `Аренда`, `Ремонт`, `Доставка`, safe fallback)
-- [x] Ensure `Компания` and `Номер заказа` are optional and printed only when explicitly present
-- [x] Remove old `Следующий шаг` block from Telegram message body
-- [x] Add local smoke verification examples for new format
+- [x] Add fail-fast startup guard in poller wrapper for required Tele2 auth env:
+  - `T2_API_TOKEN` (or fallback `T2_ACCESS_TOKEN`)
+  - `T2_REFRESH_TOKEN`
+- [x] Add explicit runtime signaling for token/env/auth failures (structured logs + stable non-zero exits)
+- [x] Document token recovery and post-fix verification runbook
+- [x] Document SSH/SG access baseline to keep operator access during incidents
+- [ ] Roll out hardening wrapper/docs to production VM and capture verification logs
 
 Explicitly not in this change set:
 
+- [x] Telegram format changes are out of scope
 - [x] ignored numbers changes are out of scope
 - [x] owner routing changes are out of scope
 - [x] Telegram buttons changes are out of scope
@@ -133,6 +138,12 @@ Explicitly not in this change set:
     - [x] описать install/verify шаги в README
     - [ ] установить logrotate config на VM
     - [ ] подтвердить forced rotation + retention
+  - [ ] 8.20 Post-incident hardening pass (`2026-03-14`):
+    - [x] добавить fail-fast env validation для poller wrapper (`T2_API_TOKEN` / `T2_REFRESH_TOKEN`)
+    - [x] добавить явные structured error signatures (missing token / invalid token / expired + refresh disabled)
+    - [x] добавить early guard для unreadable `/opt/t2-call-summary/tele2-poll.env`
+    - [x] синхронизировать docs/runbook (incident summary, recovery, healthcheck workflow, SSH/SG baseline)
+    - [ ] выкатить hardening-обновления на VM и зафиксировать post-fix verification
 
 ## Контрольные follow-up задачи
 
