@@ -24,6 +24,9 @@ Environment=TELE2_POLL_MIN_AUDIO_BYTES=4096
 Environment=TELE2_POLL_TIMEOUT_MS=180000
 Environment=TELE2_POLL_DRY_RUN=false
 Environment=TELE2_POLL_RETRY_FAILED=true
+Environment=TELE2_POLL_TOKEN_REFRESH_ENABLED=true
+Environment=TELE2_POLL_TOKEN_REFRESH_ON_403=true
+Environment=TELE2_POLL_TOKEN_REFRESH_LEEWAY_SECONDS=900
 Environment=AI_GATEWAY_URL=http://ai-gateway:3001
 Environment=PROCESS_CALL_URL=http://t2-call-summary:3000/api/process-call
 Environment=AI_GATEWAY_TRANSCRIBE_PATH=/transcribe
