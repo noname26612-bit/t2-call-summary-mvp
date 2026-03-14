@@ -99,6 +99,7 @@ Source of truth for current YC deploy progress and fixed decisions:
     - [x] добавить atomic update + backup для `/opt/t2-call-summary/tele2-poll.env` (`T2_API_TOKEN`, `T2_REFRESH_TOKEN`)
     - [x] встроить preflight refresh в `scripts/run-tele2-poll-once.sh` по expiry window
     - [x] встроить controlled `403 -> refresh -> one retry` в wrapper
+    - [x] зафиксировать strict warning в docs/env: при Tele2 token regeneration предыдущие токены сразу инвалидируются
     - [ ] выкатить обновлённый wrapper/helper на VM
     - [ ] подтвердить refresh flow на VM и зафиксировать результат в `DEPLOY_PROGRESS.md`
   - [ ] 8.19 Закрыть operational риск роста poller file log:

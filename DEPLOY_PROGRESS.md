@@ -187,6 +187,17 @@ Multipart transcription path for long audio is validated in production.
 Scheduled `tele2:poll-once` rollout via systemd service/timer is enabled and validated on VM.
 Next narrow milestone: rollout and verify token refresh + log rotation hardening on VM (without architecture changes).
 
+## Operational warning (Tele2 tokens)
+
+Tele2 ATS API keys behavior is strict:
+
+- if tokens are regenerated, the previous access/refresh pair becomes invalid immediately
+- do not regenerate tokens "for future use"
+- perform regeneration only inside one controlled ops step:
+  1. update env/secret right away
+  2. restart affected service right away
+  3. run verification right away
+
 ## Runtime naming status
 
 Canonical runtime names in code:

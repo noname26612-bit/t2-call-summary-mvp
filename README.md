@@ -131,274 +131,39 @@ Topology changes (worker/queue/extra services) не требуются на эт
 
 `POST /dev/t2-ingest` остаётся scaffold/debug-маршрутом.
 
-### Manual one-record bridge test (temporary)
+### Tele2 status (high-level)
 
-Для ручной проверки маршрута `Tele2 file -> ai-gateway transcription (Polza) -> /api/process-call` добавлен временный helper:
+Что важно зафиксировать без двусмысленности:
 
-```bash
-npm run manual:tele2-record -- 2026-03-13/177342115767354776
-```
+- Tele2 ingest adapter (`POST /api/ingest/tele2`) **implemented, но feature-gated**
+  - production safe state: `TELE2_INGEST_ENABLED=false`
+  - это **не** primary production ingest path на текущем этапе
+- STT bridge через Tele2 mp3 -> `ai-gateway /transcribe` -> Polza -> `/api/process-call` **validated manually**
+- scheduled `tele2:poll-once` через systemd timer **enabled/validated**
+- production STT default остаётся `openai/gpt-4o-mini-transcribe`
+- `openai/whisper-1` проверен как candidate и отклонён для production switch
 
-Минимальные env для helper:
+Подробные runbook/checklists и status details:
 
-- `T2_API_TOKEN` (или `T2_ACCESS_TOKEN`)
-- `AI_GATEWAY_SHARED_SECRET`
-- `INGEST_SHARED_SECRET` (если включён auth на `/api/process-call`)
+- `DEPLOY_PROGRESS.md` — operational status и текущий milestone
+- `TASKS.md` — execution checklist и next actions
+- `ops/systemd/` и `ops/logrotate/` — VM ops templates
 
-По умолчанию helper использует:
+### Tele2 token regeneration warning (strict)
 
-- Tele2 base URL: `https://ats2.t2.ru/crm/openapi`
-- Auth scheme: `Authorization: <token>` (`plain`)
-- ai-gateway URL: `http://127.0.0.1:3001`
-- process-call URL: `http://127.0.0.1:3000/api/process-call`
+В Tele2 ATS API keys действует жёсткое правило:
 
-Helper:
-- скачивает `mp3` через `GET /call-records/file?filename=...`
-- пытается найти metadata звонка через `GET /call-records/info`
-- транскрибирует аудио через `ai-gateway /transcribe` (upstream: Polza) через `multipart/form-data` file upload
-- отправляет canonical payload в `POST /api/process-call`
+- при повторной генерации предыдущие токены становятся недействительными
 
-По умолчанию используется production-validated STT модель:
-- `openai/gpt-4o-mini-transcribe`
+Следствие для операций:
 
-Opt-in compare режим для ручного quality-check (без глобального switch):
-
-```bash
-npm run manual:tele2-record -- 2026-03-13/177342115767354776 \
-  --transcribe-model openai/gpt-4o-mini-transcribe \
-  --compare-transcribe-model openai/whisper-1
-```
-
-Можно использовать alias `candidate` (берётся из `POLZA_TRANSCRIBE_MODEL_CANDIDATE` в `ai-gateway` env):
-
-```bash
-npm run manual:tele2-record -- 2026-03-13/177342115767354776 \
-  --compare-transcribe-model candidate
-```
-
-### Tele2 poll-once MVP (manual and scheduled command)
-
-Для безопасной ручной обработки новых Tele2 записей добавлена one-shot команда:
-
-```bash
-npm run tele2:poll-once
-```
-
-Маршрут команды:
-- `call-records/info` -> candidate select -> dedup (`recordFileName`) -> `call-records/file`
-- `ai-gateway /transcribe` (`multipart/form-data`, без `audioBase64` JSON)
-- canonical `POST /api/process-call`
-
-Что важно на этом этапе:
-- one-shot execution path остаётся тем же (`tele2:poll-once`)
-- scheduler добавляется только как обёртка запуска (без worker/queue/webhook)
-- dedup durable в PostgreSQL (`tele2_polled_records`)
-- в dry-run не вызывается `/api/process-call`
-- обычный flow без флагов использует default STT модель (`openai/gpt-4o-mini-transcribe`)
-
-Dry-run пример:
-
-```bash
-npm run tele2:poll-once -- --dry-run --max-candidates 3
-```
-
-Dry-run compare пример (candidate не отправляется в `/api/process-call`):
-
-```bash
-npm run tele2:poll-once -- --dry-run --max-candidates 3 \
-  --transcribe-model openai/gpt-4o-mini-transcribe \
-  --compare-transcribe-model openai/whisper-1
-```
-
-Для safety compare mode в `tele2:poll-once` разрешён только при `--dry-run`.
-
-Первый запуск после обновления кода:
-
-```bash
-npm run migrate
-npm run tele2:poll-once -- --dry-run
-```
-
-### Scheduled rollout on VM (systemd timer + token refresh, safe profile)
-
-В репозитории добавлены минимальные ops-артефакты:
-
-- wrapper: `scripts/run-tele2-poll-once.sh`
-- token refresh helper: `scripts/refresh-tele2-token.sh`
-- systemd service: `ops/systemd/t2-tele2-poll.service`
-- systemd timer: `ops/systemd/t2-tele2-poll.timer`
-- env template: `ops/systemd/tele2-poll.env.example`
-- logrotate config template: `ops/logrotate/t2-tele2-poll`
-
-Safe starter profile (подтверждённый для длинных записей):
-
-- interval: каждые `15` минут (`systemd timer`)
-- `--lookback-minutes 60`
-- `--max-candidates 10`
-- `--timeout-ms 180000`
-- `retry-failed=true`
-- refresh preflight по сроку жизни access token
-- при Tele2 `403` выполняется один controlled refresh и один retry
-- wrapper пишет JSON-lines в journal и в файл лога
-- wrapper требует `docker` и `flock` (обычно пакет `util-linux`)
-
-Wrapper exit codes:
-
-- `0`: poll completed или overlap-skip (второй параллельный запуск не стартует)
-- `2`: wrapper/env/infra misconfiguration (например отсутствует env file или docker network)
-- `3`: token refresh failed (helper/env/refresh endpoint)
-- другое `!=0`: ошибка самого `tele2:poll-once`
-
-VM install (one-time):
-
-```bash
-cd /home/artem266/t2-call-summary-mvp
-
-# If VM checkout path/user differs, edit PROJECT_DIR/ExecStart/User in
-# ops/systemd/t2-tele2-poll.service before copying.
-
-sudo cp ops/systemd/t2-tele2-poll.service /etc/systemd/system/
-sudo cp ops/systemd/t2-tele2-poll.timer /etc/systemd/system/
-
-# Create tele2-poll.env only once (do not overwrite a live configured file).
-if [ ! -f /opt/t2-call-summary/tele2-poll.env ]; then
-  sudo install -m 0600 -o artem266 -g artem266 \
-    ops/systemd/tele2-poll.env.example /opt/t2-call-summary/tele2-poll.env
-fi
-
-# Keep writable for wrapper token refresh updates.
-sudo chown artem266:artem266 /opt/t2-call-summary/tele2-poll.env
-sudo chmod 600 /opt/t2-call-summary/tele2-poll.env
-
-sudoedit /opt/t2-call-summary/tele2-poll.env
-# Required:
-# T2_API_TOKEN=<live_token>
-# T2_REFRESH_TOKEN=<live_refresh_token>
-
-sudo systemctl daemon-reload
-sudo systemctl enable --now t2-tele2-poll.timer
-```
-
-`t2-tele2-poll.service` использует `TimeoutStartSec=0`, чтобы длинные записи не убивались таймаутом systemd.
-
-Manual run через тот же service:
-
-```bash
-sudo systemctl start t2-tele2-poll.service
-sudo systemctl status t2-tele2-poll.service --no-pager
-```
-
-Logs:
-
-```bash
-journalctl -u t2-tele2-poll.service -n 200 --no-pager
-tail -n 200 /home/artem266/t2-call-summary-mvp/logs/tele2-poll-once.log
-```
-
-Logrotate install/update (recommended):
-
-```bash
-cd /home/artem266/t2-call-summary-mvp
-sudo cp ops/logrotate/t2-tele2-poll /etc/logrotate.d/t2-tele2-poll
-sudo chown root:root /etc/logrotate.d/t2-tele2-poll
-sudo chmod 0644 /etc/logrotate.d/t2-tele2-poll
-
-# dry check
-sudo logrotate -d /etc/logrotate.d/t2-tele2-poll
-
-# optional force test
-sudo logrotate -f /etc/logrotate.d/t2-tele2-poll
-```
-
-Manual token refresh check:
-
-```bash
-cd /home/artem266/t2-call-summary-mvp
-./scripts/refresh-tele2-token.sh --env-file /opt/t2-call-summary/tele2-poll.env
-```
-
-Pause/stop:
-
-```bash
-sudo systemctl disable --now t2-tele2-poll.timer
-```
-
-Rollback к ручному режиму:
-
-```bash
-sudo systemctl disable --now t2-tele2-poll.timer
-sudo systemctl stop t2-tele2-poll.service || true
-# дальше запуск только вручную:
-cd /home/artem266/t2-call-summary-mvp
-./scripts/run-tele2-poll-once.sh --dry-run
-```
-
-### Integration assumptions (до подтверждения Tele2 contract)
-
-- финальная Tele2 webhook/schema **не зафиксирована** в runtime
-- adapter не хардкодит "предполагаемые Tele2 поля"; он использует:
-  - env path mapping (`TELE2_PHONE_FIELD_PATH`, `TELE2_CALL_DATETIME_FIELD_PATH`, `TELE2_TRANSCRIPT_FIELD_PATH`)
-  - fallback только на канонические top-level keys: `phone`, `callDateTime`, `transcript`
-- если обязательные поля не найдены: ответ `400` + `status=invalid_t2_payload`, без падения сервиса
-- transcript текст не пишется в structured logs (только метаданные)
-
-### Exact fields to confirm with Tele2 before cutover
-
-- путь до номера клиента в payload (`phone`)
-- путь до даты/времени звонка (`callDateTime`) и точный формат/таймзона
-- путь до транскрипта (`transcript`) и максимальный размер
-- event id/call id для трассировки в логах (если есть в payload)
-- retry policy со стороны Tele2 (повторы при 4xx/5xx, таймаут запроса)
-- expected auth header/value format со стороны Tele2
-- допустимый SLA по времени ответа webhook
-
-### Where adapter plugs into current app
-
-- HTTP route: `src/server.js` -> `POST /api/ingest/tele2`
-- adapter normalization: `src/services/t2Mapper.js`
-- ingest orchestration: `src/services/t2IngestService.js`
-- canonical processing path (unchanged):
-  - `/api/ingest/tele2` -> `processCall` -> `ai-gateway` -> provider -> PostgreSQL -> Telegram
-
-### Safe testing before full cutover
-
-1. Включить endpoint на staging/production VM только для теста:
-   - `TELE2_INGEST_ENABLED=true`
-2. Запустить dry-run запросы с реальным/полуреальным Tele2 payload:
-   - `X-Ingest-Dry-Run: true`
-3. Проверить нормализацию и ошибки по missing fields без запуска анализа/Telegram.
-4. После подтверждения field paths заполнить `TELE2_*_FIELD_PATH` и повторить dry-run.
-5. Выполнить ограниченный smoke без dry-run (1-2 тестовых звонка), затем вернуть dry-run при необходимости.
-
-### Tele2 cutover checklists (safe rollout)
-
-Preflight checklist:
-- `POST /api/process-call` остаётся рабочим (не трогаем контракт)
-- `TELE2_INGEST_ENABLED` включается осознанно (по умолчанию `false`)
-- `INGEST_SHARED_SECRET` задан и синхронизирован с upstream
-- `TELE2_*_FIELD_PATH` заполнены только после подтверждения с Tele2
-- текущий runtime route подтверждён: main app -> ai-gateway -> provider
-- monitoring baseline (`healthz`, baseline-check, logs) зелёный
-
-Smoke test checklist:
-- `POST /api/ingest/tele2` c `X-Ingest-Dry-Run: true` возвращает `normalized_preview`
-- dry-run на неполном payload возвращает `400 invalid_t2_payload` с понятными полями
-- 1 валидный запрос без dry-run возвращает `status=processed`
-- Telegram delivery = `sent`
-- в логах нет утечки transcript текста
-
-Rollback checklist:
-- выставить `TELE2_INGEST_ENABLED=false`
-- вернуть traffic на уже рабочий ingest path (если временно переключали источник)
-- перезапустить контейнер main app
-- проверить `GET /healthz` и короткий smoke через `POST /api/process-call`
-
-Production verification checklist:
-- `GET /healthz` main app = `ok`, `database=ok`
-- `baseline-check.sh` exit code `0`
-- 4xx по Tele2 adapter ожидаемы только для неполных payload и отслеживаются
-- 5xx rate по main app/gateway без регрессии
-- успешные Tele2 ingest запросы доходят до Telegram с `status=sent`
+- **не** регенерировать access/refresh pair заранее «на всякий случай»
+- регенерацию делать только как controlled step, когда одновременно готовы:
+  1. сразу обновить env/secret
+  2. сразу перезапустить сервис
+  3. сразу выполнить verification
+  4. при необходимости сразу откатить/повторить шаг
+- правило одинаково для `.env`, `/opt/t2-call-summary/main.env` и `/opt/t2-call-summary/tele2-poll.env`
 
 ## Business categories (документированная целевая модель)
 
@@ -446,6 +211,7 @@ Runtime и документация синхронизированы с этим
 - `TELE2_POLL_TIMEOUT_MS=180000` (wrapper env for scheduled runs)
 - `T2_API_TOKEN` (required for Tele2 polling)
 - `T2_REFRESH_TOKEN` (required for automatic token refresh in wrapper)
+- `T2_API_TOKEN`/`T2_REFRESH_TOKEN` регенерировать только в controlled rollout window (старые токены сразу инвалидируются)
 - `T2_REFRESH_AUTH_SCHEME=plain`
 - `TELE2_POLL_TOKEN_REFRESH_ENABLED=true`
 - `TELE2_POLL_TOKEN_REFRESH_ON_403=true`
