@@ -14,12 +14,25 @@ const ANALYSIS_CATEGORIES = Object.freeze([
 ]);
 
 const ANALYSIS_PRIORITIES = Object.freeze(['low', 'medium', 'high']);
+const PRIMARY_SCENARIOS = Object.freeze(['Запчасти', 'Аренда', 'Ремонт', 'Доставка', 'Другое']);
+const REPAIR_TYPES = Object.freeze(['капитальный', 'выездной']);
 
 const MAX_TEXT_LENGTH = Object.freeze({
   topic: 80,
   summary: 220,
   outcome: 180,
-  nextStep: 180
+  nextStep: 180,
+  wantedSummary: 420,
+  partsItem: 80,
+  rentalStart: 80,
+  rentalDuration: 80,
+  rentalAddress: 180,
+  repairEquipment: 120,
+  repairDateOrTerm: 80,
+  repairAddress: 180,
+  deliveryDetails: 180,
+  companyName: 120,
+  orderNumber: 64
 });
 
 const MAX_TRANSCRIBE_AUDIO_BYTES = 20 * 1024 * 1024;
@@ -27,7 +40,17 @@ const MAX_TRANSCRIBE_AUDIO_BYTES = 20 * 1024 * 1024;
 const ANALYSIS_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['category', 'topic', 'summary', 'outcome', 'nextStep', 'priority', 'tags'],
+  required: [
+    'category',
+    'topic',
+    'summary',
+    'outcome',
+    'nextStep',
+    'priority',
+    'tags',
+    'primaryScenario',
+    'wantedSummary'
+  ],
   properties: {
     category: {
       type: 'string',
@@ -66,6 +89,73 @@ const ANALYSIS_SCHEMA = {
         minLength: 1,
         maxLength: 32
       }
+    },
+    primaryScenario: {
+      type: 'string',
+      enum: PRIMARY_SCENARIOS
+    },
+    wantedSummary: {
+      type: 'string',
+      minLength: 1,
+      maxLength: MAX_TEXT_LENGTH.wantedSummary
+    },
+    partsRequested: {
+      type: 'array',
+      maxItems: 10,
+      items: {
+        type: 'string',
+        minLength: 1,
+        maxLength: MAX_TEXT_LENGTH.partsItem
+      }
+    },
+    rentalStart: {
+      type: 'string',
+      minLength: 1,
+      maxLength: MAX_TEXT_LENGTH.rentalStart
+    },
+    rentalDuration: {
+      type: 'string',
+      minLength: 1,
+      maxLength: MAX_TEXT_LENGTH.rentalDuration
+    },
+    rentalAddress: {
+      type: 'string',
+      minLength: 1,
+      maxLength: MAX_TEXT_LENGTH.rentalAddress
+    },
+    repairEquipment: {
+      type: 'string',
+      minLength: 1,
+      maxLength: MAX_TEXT_LENGTH.repairEquipment
+    },
+    repairDateOrTerm: {
+      type: 'string',
+      minLength: 1,
+      maxLength: MAX_TEXT_LENGTH.repairDateOrTerm
+    },
+    repairType: {
+      type: 'string',
+      enum: REPAIR_TYPES
+    },
+    repairAddress: {
+      type: 'string',
+      minLength: 1,
+      maxLength: MAX_TEXT_LENGTH.repairAddress
+    },
+    deliveryDetails: {
+      type: 'string',
+      minLength: 1,
+      maxLength: MAX_TEXT_LENGTH.deliveryDetails
+    },
+    companyName: {
+      type: 'string',
+      minLength: 1,
+      maxLength: MAX_TEXT_LENGTH.companyName
+    },
+    orderNumber: {
+      type: 'string',
+      minLength: 1,
+      maxLength: MAX_TEXT_LENGTH.orderNumber
     }
   }
 };
@@ -77,12 +167,70 @@ const SYSTEM_PROMPT = `
 Поле category: одно значение из [продажа, сервис, запчасти, аренда, спам, прочее].
 Поле priority: одно значение из [low, medium, high].
 Поле tags: массив строк от 1 до 5 тегов без дублей.
+Поле primaryScenario: одно значение из [Запчасти, Аренда, Ремонт, Доставка, Другое].
+Поле wantedSummary: 2-4 короткие строки по сути запроса без воды.
+
+Правила по сценариям:
+- один звонок = один primaryScenario
+- всё, что не входит в primaryScenario, оставляй в wantedSummary
+- Запчасти: используй partsRequested (список, без дублей, не выдумывать)
+- Аренда: используй rentalStart / rentalDuration / rentalAddress по фактам из звонка
+- Ремонт: используй repairEquipment / repairDateOrTerm / repairType / repairAddress
+- Доставка: используй deliveryDetails только если есть конкретика; не пиши шаблон "Уточнение по доставке: Вопросы по доставке"
+- companyName и orderNumber заполняй только если эти данные явно и дословно прозвучали в разговоре
+- если явного упоминания нет, не заполняй эти поля
+
+Правила по датам:
+- если дата точная, передавай точную дату
+- если время относительное и точное (например "через 3 дня"), считай от callDateTime
+- если срок неточный (например "через 2-3 недели"), не придумывай точную дату, оставляй текстом (например "примерно через 2-3 недели")
 
 Если данных мало, ставь:
 - category: "прочее"
 - priority: "low"
-- нейтральные формулировки в summary/outcome/nextStep.
+- primaryScenario: "Другое"
+- нейтральные формулировки в summary/outcome/nextStep/wantedSummary.
 `;
+
+const PRIMARY_SCENARIO_BY_CATEGORY = Object.freeze({
+  запчасти: 'Запчасти',
+  аренда: 'Аренда',
+  сервис: 'Ремонт',
+  продажа: 'Другое',
+  спам: 'Другое',
+  прочее: 'Другое'
+});
+
+const PRIMARY_SCENARIO_ALIASES = Object.freeze({
+  запчасти: 'Запчасти',
+  запчасть: 'Запчасти',
+  parts: 'Запчасти',
+  аренда: 'Аренда',
+  прокат: 'Аренда',
+  rental: 'Аренда',
+  ремонт: 'Ремонт',
+  сервис: 'Ремонт',
+  service: 'Ремонт',
+  доставка: 'Доставка',
+  логистика: 'Доставка',
+  delivery: 'Доставка',
+  другое: 'Другое',
+  прочее: 'Другое',
+  unknown: 'Другое'
+});
+
+const EMPTY_OPTIONAL_TEXT_TOKENS = new Set([
+  '-',
+  '—',
+  'нет',
+  'не указано',
+  'n/a',
+  'na',
+  'none',
+  'unknown',
+  'null',
+  'undefined'
+]);
 
 class OpenAIClientError extends Error {
   constructor(message, statusCode = 502, code = 'POLZA_CLIENT_ERROR') {
@@ -95,6 +243,22 @@ class OpenAIClientError extends Error {
 
 function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim() !== '';
+}
+
+function stringFromUnknown(value) {
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value);
+  }
+
+  if (typeof value === 'boolean') {
+    return value ? 'true' : 'false';
+  }
+
+  return '';
 }
 
 function sanitizePolzaErrorMessage(error) {
@@ -136,6 +300,19 @@ function normalizeText(value, maxLength) {
   return normalized.slice(0, maxLength).trim();
 }
 
+function clampMultilineText(value, maxLength) {
+  const normalized = stringFromUnknown(value).replace(/\r\n/g, '\n').trim();
+  if (!normalized) {
+    return '';
+  }
+
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return normalized.slice(0, maxLength).trim();
+}
+
 function normalizeEnum(value, allowedValues, fallbackValue) {
   if (!isNonEmptyString(value)) {
     return fallbackValue;
@@ -147,6 +324,150 @@ function normalizeEnum(value, allowedValues, fallbackValue) {
   }
 
   return fallbackValue;
+}
+
+function normalizeOptionalText(value, maxLength) {
+  const normalized = normalizeText(value, maxLength);
+  if (!normalized) {
+    return '';
+  }
+
+  if (EMPTY_OPTIONAL_TEXT_TOKENS.has(normalized.toLowerCase())) {
+    return '';
+  }
+
+  return normalized;
+}
+
+function normalizeUniqueItems(rawValues, { maxLength, maxItems }) {
+  if (!Array.isArray(rawValues)) {
+    return [];
+  }
+
+  const normalizedItems = [];
+  const seen = new Set();
+
+  for (const rawValue of rawValues) {
+    const normalized = normalizeOptionalText(rawValue, maxLength);
+    if (!normalized) {
+      continue;
+    }
+
+    const dedupeKey = normalized.toLowerCase();
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+
+    normalizedItems.push(normalized);
+    seen.add(dedupeKey);
+
+    if (normalizedItems.length >= maxItems) {
+      break;
+    }
+  }
+
+  return normalizedItems;
+}
+
+function inferPrimaryScenarioFromText(text) {
+  if (!text) {
+    return '';
+  }
+
+  if (text.includes('запчаст') || text.includes('подшип') || text.includes('ролик')) {
+    return 'Запчасти';
+  }
+
+  if (text.includes('аренд') || text.includes('прокат')) {
+    return 'Аренда';
+  }
+
+  if (text.includes('доставк') || text.includes('логист') || text.includes('самовывоз') || text.includes('отгруз')) {
+    return 'Доставка';
+  }
+
+  if (text.includes('ремонт') || text.includes('сервис') || text.includes('неисправ') || text.includes('диагност')) {
+    return 'Ремонт';
+  }
+
+  return '';
+}
+
+function normalizePrimaryScenario(rawPrimaryScenario, category, contextText) {
+  if (isNonEmptyString(rawPrimaryScenario)) {
+    const token = normalizeWhitespace(rawPrimaryScenario).toLowerCase().replace(/[\s-]+/g, '_');
+    const aliasValue = PRIMARY_SCENARIO_ALIASES[token];
+    if (aliasValue) {
+      return aliasValue;
+    }
+  }
+
+  const inferredFromText = inferPrimaryScenarioFromText(contextText);
+  if (inferredFromText) {
+    return inferredFromText;
+  }
+
+  return PRIMARY_SCENARIO_BY_CATEGORY[category] || 'Другое';
+}
+
+function normalizeWantedSummary(rawWantedSummary, fallbackCandidates) {
+  const rawLines = stringFromUnknown(rawWantedSummary)
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => normalizeOptionalText(line, MAX_TEXT_LENGTH.wantedSummary))
+    .filter((line) => line !== '');
+
+  const fallbackLines = fallbackCandidates
+    .map((line) => normalizeOptionalText(line, MAX_TEXT_LENGTH.summary))
+    .filter((line) => line !== '');
+
+  const merged = [...rawLines];
+  if (rawLines.length < 2) {
+    merged.push(...fallbackLines);
+  }
+  const deduped = [];
+  const seen = new Set();
+
+  for (const line of merged) {
+    const dedupeKey = line.toLowerCase();
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+
+    deduped.push(line);
+    seen.add(dedupeKey);
+
+    if (deduped.length >= 4) {
+      break;
+    }
+  }
+
+  if (deduped.length === 0) {
+    return 'Запрос клиента зафиксирован.\nКлючевые детали уточняются.';
+  }
+
+  if (deduped.length === 1) {
+    return clampMultilineText(`${deduped[0]}\nКлючевые детали уточняются.`, MAX_TEXT_LENGTH.wantedSummary);
+  }
+
+  return clampMultilineText(deduped.join('\n'), MAX_TEXT_LENGTH.wantedSummary);
+}
+
+function normalizeRepairType(rawRepairType) {
+  if (!isNonEmptyString(rawRepairType)) {
+    return '';
+  }
+
+  const token = normalizeWhitespace(rawRepairType).toLowerCase().replace(/[\s-]+/g, '_');
+  if (['выездной', 'выезд', 'on_site', 'onsite'].includes(token)) {
+    return 'выездной';
+  }
+
+  if (['капитальный', 'цех', 'в_цеху', 'стационарный'].includes(token)) {
+    return 'капитальный';
+  }
+
+  return '';
 }
 
 function normalizeTags(rawTags) {
@@ -183,30 +504,97 @@ function normalizeAndValidateAnalysis(raw) {
     throw new OpenAIClientError('Polza returned invalid analysis payload shape', 502, 'POLZA_INVALID_PAYLOAD');
   }
 
+  const normalizedCategory = normalizeEnum(raw.category, ANALYSIS_CATEGORIES, 'прочее');
+  const normalizedTopic = normalizeText(raw.topic, MAX_TEXT_LENGTH.topic) || 'Общий запрос клиента';
+  const normalizedSummary = normalizeText(raw.summary, MAX_TEXT_LENGTH.summary) || 'Запрос клиента зафиксирован.';
+  const normalizedOutcome = normalizeText(raw.outcome, MAX_TEXT_LENGTH.outcome) || 'Требуется уточнение деталей.';
+  const normalizedNextStep = normalizeText(raw.nextStep, MAX_TEXT_LENGTH.nextStep) || 'Связаться с клиентом для уточнения деталей.';
+  const normalizedPriority = normalizeEnum(raw.priority, ANALYSIS_PRIORITIES, 'low');
+  const normalizedTags = normalizeTags(raw.tags);
+  const contextText = [
+    normalizedTopic,
+    normalizedSummary,
+    normalizedOutcome,
+    normalizedNextStep,
+    normalizeText(raw.wantedSummary, MAX_TEXT_LENGTH.wantedSummary),
+    normalizeText(raw.primaryScenario, 32),
+    normalizeText(raw.deliveryDetails, MAX_TEXT_LENGTH.deliveryDetails)
+  ]
+    .join(' ')
+    .toLowerCase();
+
+  const partsRequested = normalizeUniqueItems(raw.partsRequested, {
+    maxLength: MAX_TEXT_LENGTH.partsItem,
+    maxItems: 10
+  });
+  const repairType = normalizeRepairType(raw.repairType);
+
   const normalized = {
-    category: normalizeEnum(raw.category, ANALYSIS_CATEGORIES, 'прочее'),
-    topic: normalizeText(raw.topic, MAX_TEXT_LENGTH.topic),
-    summary: normalizeText(raw.summary, MAX_TEXT_LENGTH.summary),
-    outcome: normalizeText(raw.outcome, MAX_TEXT_LENGTH.outcome),
-    nextStep: normalizeText(raw.nextStep, MAX_TEXT_LENGTH.nextStep),
-    priority: normalizeEnum(raw.priority, ANALYSIS_PRIORITIES, 'low'),
-    tags: normalizeTags(raw.tags)
+    category: normalizedCategory,
+    topic: normalizedTopic,
+    summary: normalizedSummary,
+    outcome: normalizedOutcome,
+    nextStep: normalizedNextStep,
+    priority: normalizedPriority,
+    tags: normalizedTags,
+    primaryScenario: normalizePrimaryScenario(raw.primaryScenario, normalizedCategory, contextText),
+    wantedSummary: normalizeWantedSummary(raw.wantedSummary, [
+      normalizedSummary,
+      normalizedOutcome
+    ])
   };
 
-  if (!normalized.topic) {
-    normalized.topic = 'Общий запрос клиента';
+  if (partsRequested.length > 0) {
+    normalized.partsRequested = partsRequested;
   }
 
-  if (!normalized.summary) {
-    normalized.summary = 'Запрос клиента зафиксирован.';
+  const rentalStart = normalizeOptionalText(raw.rentalStart, MAX_TEXT_LENGTH.rentalStart);
+  if (rentalStart) {
+    normalized.rentalStart = rentalStart;
   }
 
-  if (!normalized.outcome) {
-    normalized.outcome = 'Требуется уточнение деталей.';
+  const rentalDuration = normalizeOptionalText(raw.rentalDuration, MAX_TEXT_LENGTH.rentalDuration);
+  if (rentalDuration) {
+    normalized.rentalDuration = rentalDuration;
   }
 
-  if (!normalized.nextStep) {
-    normalized.nextStep = 'Связаться с клиентом для уточнения деталей.';
+  const rentalAddress = normalizeOptionalText(raw.rentalAddress, MAX_TEXT_LENGTH.rentalAddress);
+  if (rentalAddress) {
+    normalized.rentalAddress = rentalAddress;
+  }
+
+  const repairEquipment = normalizeOptionalText(raw.repairEquipment, MAX_TEXT_LENGTH.repairEquipment);
+  if (repairEquipment) {
+    normalized.repairEquipment = repairEquipment;
+  }
+
+  const repairDateOrTerm = normalizeOptionalText(raw.repairDateOrTerm, MAX_TEXT_LENGTH.repairDateOrTerm);
+  if (repairDateOrTerm) {
+    normalized.repairDateOrTerm = repairDateOrTerm;
+  }
+
+  if (repairType) {
+    normalized.repairType = repairType;
+  }
+
+  const repairAddress = normalizeOptionalText(raw.repairAddress, MAX_TEXT_LENGTH.repairAddress);
+  if (repairAddress) {
+    normalized.repairAddress = repairAddress;
+  }
+
+  const deliveryDetails = normalizeOptionalText(raw.deliveryDetails, MAX_TEXT_LENGTH.deliveryDetails);
+  if (deliveryDetails) {
+    normalized.deliveryDetails = deliveryDetails;
+  }
+
+  const companyName = normalizeOptionalText(raw.companyName, MAX_TEXT_LENGTH.companyName);
+  if (companyName) {
+    normalized.companyName = companyName;
+  }
+
+  const orderNumber = normalizeOptionalText(raw.orderNumber, MAX_TEXT_LENGTH.orderNumber);
+  if (orderNumber) {
+    normalized.orderNumber = orderNumber;
   }
 
   if (normalized.tags.length === 0) {

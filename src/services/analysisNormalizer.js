@@ -8,12 +8,25 @@ const ANALYSIS_CATEGORIES = Object.freeze([
 ]);
 
 const ANALYSIS_URGENCY = Object.freeze(['низкая', 'средняя', 'высокая']);
+const PRIMARY_SCENARIOS = Object.freeze(['Запчасти', 'Аренда', 'Ремонт', 'Доставка', 'Другое']);
+const REPAIR_TYPES = Object.freeze(['капитальный', 'выездной']);
 
 const TEXT_LIMITS = Object.freeze({
   topic: 80,
   summary: 220,
   result: 160,
-  nextStep: 160
+  nextStep: 160,
+  wantedSummary: 420,
+  partsItem: 80,
+  rentalStart: 80,
+  rentalDuration: 80,
+  rentalAddress: 180,
+  repairEquipment: 120,
+  repairDateOrTerm: 80,
+  repairAddress: 180,
+  deliveryDetails: 180,
+  companyName: 120,
+  orderNumber: 64
 });
 
 const REQUIRED_FIELDS = Object.freeze([
@@ -25,6 +38,78 @@ const REQUIRED_FIELDS = Object.freeze([
   'urgency',
   'tags',
   'confidence'
+]);
+
+const OPTIONAL_FIELDS = Object.freeze([
+  'primaryScenario',
+  'wantedSummary',
+  'partsRequested',
+  'rentalStart',
+  'rentalDuration',
+  'rentalAddress',
+  'repairEquipment',
+  'repairDateOrTerm',
+  'repairType',
+  'repairAddress',
+  'deliveryDetails',
+  'companyName',
+  'orderNumber'
+]);
+
+const PRIMARY_SCENARIO_BY_CATEGORY = Object.freeze({
+  запчасти: 'Запчасти',
+  аренда: 'Аренда',
+  сервис: 'Ремонт',
+  продажа: 'Другое',
+  спам: 'Другое',
+  прочее: 'Другое'
+});
+
+const PRIMARY_SCENARIO_ALIASES = Object.freeze({
+  запчасти: 'Запчасти',
+  запчасть: 'Запчасти',
+  parts: 'Запчасти',
+  аренда: 'Аренда',
+  прокат: 'Аренда',
+  rental: 'Аренда',
+  ремонт: 'Ремонт',
+  сервис: 'Ремонт',
+  service: 'Ремонт',
+  доставка: 'Доставка',
+  логистика: 'Доставка',
+  delivery: 'Доставка',
+  другое: 'Другое',
+  прочее: 'Другое',
+  unknown: 'Другое'
+});
+
+const EMPTY_OPTIONAL_TEXT_TOKENS = new Set([
+  '-',
+  '—',
+  'нет',
+  'не указано',
+  'n/a',
+  'na',
+  'none',
+  'unknown',
+  'null',
+  'undefined'
+]);
+
+const COMPANY_NOISE_TOKENS = new Set([
+  'ооо',
+  'ооо"',
+  '"ооо',
+  'ип',
+  'зао',
+  'ао',
+  'пао',
+  'оао',
+  'llc',
+  'ltd',
+  'inc',
+  'company',
+  'компания'
 ]);
 
 const DEFAULT_TOPIC_BY_CATEGORY = Object.freeze({
@@ -195,6 +280,338 @@ function normalizeText(value, maxLength) {
   return normalized.slice(0, maxLength).trim();
 }
 
+function clampMultilineText(value, maxLength) {
+  const normalized = stringFromUnknown(value).replace(/\r\n/g, '\n').trim();
+  if (!normalized) {
+    return '';
+  }
+
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return normalized.slice(0, maxLength).trim();
+}
+
+function normalizeOptionalText(value, maxLength) {
+  const normalized = normalizeText(value, maxLength);
+  if (!normalized) {
+    return '';
+  }
+
+  if (EMPTY_OPTIONAL_TEXT_TOKENS.has(normalized.toLowerCase())) {
+    return '';
+  }
+
+  return normalized;
+}
+
+function normalizeUniqueStringArray(rawValues, { maxLength, maxItems }) {
+  const candidates = [];
+
+  if (Array.isArray(rawValues)) {
+    candidates.push(...rawValues);
+  } else if (typeof rawValues === 'string') {
+    candidates.push(...rawValues.split(/[;,\n|]+/));
+  }
+
+  const normalizedItems = [];
+  const seen = new Set();
+
+  for (const candidate of candidates) {
+    const normalized = normalizeOptionalText(candidate, maxLength);
+    if (!normalized) {
+      continue;
+    }
+
+    const dedupeKey = normalized.toLowerCase();
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+
+    normalizedItems.push(normalized);
+    seen.add(dedupeKey);
+
+    if (normalizedItems.length >= maxItems) {
+      break;
+    }
+  }
+
+  return normalizedItems;
+}
+
+function inferPrimaryScenarioFromText(contextText) {
+  if (!contextText) {
+    return null;
+  }
+
+  if (contextText.includes('запчаст') || contextText.includes('подшип') || contextText.includes('ролик')) {
+    return 'Запчасти';
+  }
+
+  if (contextText.includes('аренд') || contextText.includes('прокат')) {
+    return 'Аренда';
+  }
+
+  if (
+    contextText.includes('доставк') ||
+    contextText.includes('логист') ||
+    contextText.includes('самовывоз') ||
+    contextText.includes('отгруз')
+  ) {
+    return 'Доставка';
+  }
+
+  if (
+    contextText.includes('ремонт') ||
+    contextText.includes('сервис') ||
+    contextText.includes('неисправ') ||
+    contextText.includes('диагност')
+  ) {
+    return 'Ремонт';
+  }
+
+  return null;
+}
+
+function normalizePrimaryScenario(rawPrimaryScenario, category, contextText) {
+  const normalizedToken = normalizeEnumToken(rawPrimaryScenario);
+  if (normalizedToken) {
+    const aliasValue = PRIMARY_SCENARIO_ALIASES[normalizedToken];
+    if (aliasValue) {
+      return aliasValue;
+    }
+  }
+
+  const inferredFromText = inferPrimaryScenarioFromText(contextText);
+  if (inferredFromText) {
+    return inferredFromText;
+  }
+
+  return PRIMARY_SCENARIO_BY_CATEGORY[category] || 'Другое';
+}
+
+function normalizeWantedSummary(rawWantedSummary, fallbackCandidates) {
+  const linesFromRaw = stringFromUnknown(rawWantedSummary)
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => normalizeOptionalText(line, TEXT_LIMITS.wantedSummary))
+    .filter((line) => line !== '');
+
+  const fallbackLines = fallbackCandidates
+    .map((value) => normalizeOptionalText(value, TEXT_LIMITS.summary))
+    .filter((line) => line !== '');
+
+  const merged = [...linesFromRaw];
+  if (linesFromRaw.length < 2) {
+    merged.push(...fallbackLines);
+  }
+  const deduped = [];
+  const seen = new Set();
+
+  for (const line of merged) {
+    const dedupeKey = line.toLowerCase();
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+
+    deduped.push(line);
+    seen.add(dedupeKey);
+
+    if (deduped.length >= 4) {
+      break;
+    }
+  }
+
+  if (deduped.length === 0) {
+    return 'Запрос клиента зафиксирован.\nКлючевые детали уточняются.';
+  }
+
+  if (deduped.length === 1) {
+    return clampMultilineText(`${deduped[0]}\nКлючевые детали уточняются.`, TEXT_LIMITS.wantedSummary);
+  }
+
+  return clampMultilineText(deduped.join('\n'), TEXT_LIMITS.wantedSummary);
+}
+
+function normalizeRepairType(rawRepairType) {
+  const normalizedToken = normalizeEnumToken(rawRepairType);
+  if (!normalizedToken) {
+    return '';
+  }
+
+  if (['выездной', 'выезд', 'on_site', 'onsite'].includes(normalizedToken)) {
+    return 'выездной';
+  }
+
+  if (['капитальный', 'цех', 'в_цеху', 'стационарный'].includes(normalizedToken)) {
+    return 'капитальный';
+  }
+
+  return '';
+}
+
+function normalizeTranscriptForEvidence(transcript) {
+  return stringFromUnknown(transcript)
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractFuzzyRelativeDatePhrase(transcript) {
+  const source = stringFromUnknown(transcript);
+  if (!source) {
+    return '';
+  }
+
+  const patterns = [
+    /через\s+\d+\s*[-–]\s*\d+\s*(?:дн(?:я|ей)?|недел(?:ю|и|ь)?|месяц(?:а|ев)?|час(?:а|ов)?)/iu,
+    /(?:примерно|приблизительно|около)\s+через\s+\d+\s*(?:дн(?:я|ей)?|недел(?:ю|и|ь)?|месяц(?:а|ев)?)/iu,
+    /через\s+(?:пару|несколько)\s+(?:дн(?:ей|я)?|недель|месяц(?:ев|а)?)/iu
+  ];
+
+  for (const pattern of patterns) {
+    const match = source.match(pattern);
+    if (match && match[0]) {
+      return normalizeWhitespace(match[0]);
+    }
+  }
+
+  return '';
+}
+
+function looksLikeExactCalendarDate(value) {
+  const text = normalizeWhitespace(stringFromUnknown(value));
+  if (!text) {
+    return false;
+  }
+
+  const patterns = [
+    /^\d{1,2}[./-]\d{1,2}[./-]\d{2,4}$/u,
+    /^\d{4}-\d{2}-\d{2}$/u,
+    /^\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\s+\d{1,2}:\d{2}$/u
+  ];
+
+  return patterns.some((pattern) => pattern.test(text));
+}
+
+function applyFuzzyRelativeDateGuard(value, transcript, maxLength) {
+  const normalized = normalizeOptionalText(value, maxLength);
+  if (!normalized) {
+    return '';
+  }
+
+  const fuzzyPhrase = extractFuzzyRelativeDatePhrase(transcript);
+  if (!fuzzyPhrase) {
+    return normalized;
+  }
+
+  if (!looksLikeExactCalendarDate(normalized)) {
+    return normalized;
+  }
+
+  const normalizedFuzzyPhrase = fuzzyPhrase.toLowerCase().startsWith('примерно ')
+    ? fuzzyPhrase
+    : `примерно ${fuzzyPhrase}`;
+
+  return normalizeOptionalText(normalizedFuzzyPhrase, maxLength);
+}
+
+function isCompanyExplicitlyMentioned(companyName, transcript) {
+  const normalizedCompanyName = normalizeOptionalText(companyName, TEXT_LIMITS.companyName);
+  if (!normalizedCompanyName) {
+    return false;
+  }
+
+  const normalizedTranscript = normalizeTranscriptForEvidence(transcript);
+  if (!normalizedTranscript) {
+    return false;
+  }
+
+  const cleanedCompanyText = normalizedCompanyName
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!cleanedCompanyText) {
+    return false;
+  }
+
+  const rawTokens = cleanedCompanyText
+    .split(/\s+/)
+    .filter((token) => token !== '');
+
+  const wordTokens = rawTokens.filter(
+    (token) => token.length >= 3 && !COMPANY_NOISE_TOKENS.has(token) && !/^\d+$/.test(token)
+  );
+  const numberTokens = rawTokens.filter((token) => /^\d{2,}$/.test(token));
+
+  const normalizedCompanyPhrase = [...wordTokens, ...numberTokens].join(' ').trim();
+  if (normalizedCompanyPhrase && normalizedTranscript.includes(normalizedCompanyPhrase)) {
+    return true;
+  }
+
+  const wordMatches = wordTokens.filter((token) => normalizedTranscript.includes(token)).length;
+  const numberMatches = numberTokens.filter((token) => normalizedTranscript.includes(token)).length;
+
+  if (wordTokens.length >= 2 && wordMatches >= 2) {
+    return numberTokens.length === 0 || numberMatches >= 1;
+  }
+
+  if (wordTokens.length >= 1 && numberTokens.length >= 1) {
+    return wordMatches >= 1 && numberMatches >= 1;
+  }
+
+  if (wordTokens.length === 1) {
+    const token = wordTokens[0];
+    const explicitCompanyMarkers = [`компания ${token}`, `ооо ${token}`, `ип ${token}`, `фирма ${token}`];
+    return explicitCompanyMarkers.some((marker) => normalizedTranscript.includes(marker));
+  }
+
+  if (numberTokens.length >= 1) {
+    return numberMatches >= 1 && normalizedTranscript.includes('заказ');
+  }
+
+  if (rawTokens.length > 0) {
+    return normalizedTranscript.includes(cleanedCompanyText);
+  }
+
+  return false;
+}
+
+function isOrderNumberExplicitlyMentioned(orderNumber, transcript) {
+  const normalizedOrderNumber = normalizeOptionalText(orderNumber, TEXT_LIMITS.orderNumber);
+  if (!normalizedOrderNumber) {
+    return false;
+  }
+
+  const normalizedTranscript = normalizeTranscriptForEvidence(transcript);
+  if (!normalizedTranscript) {
+    return false;
+  }
+
+  const orderDigits = normalizedOrderNumber.match(/\d{2,}/g) || [];
+  if (orderDigits.length > 0) {
+    const hasDigits = orderDigits.some((digits) => normalizedTranscript.includes(digits));
+    const hasOrderContext = normalizedTranscript.includes('заказ') || normalizedTranscript.includes('номер');
+    return hasDigits && hasOrderContext;
+  }
+
+  const compactOrderToken = normalizedOrderNumber
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '')
+    .trim();
+
+  if (compactOrderToken.length < 3) {
+    return false;
+  }
+
+  const compactTranscript = normalizedTranscript.replace(/\s+/g, '');
+  return compactTranscript.includes(compactOrderToken);
+}
+
 function inferCategoryFromText(contextText) {
   if (!contextText) {
     return null;
@@ -339,7 +756,16 @@ function normalizeTags(rawTags, category) {
 }
 
 function buildContextText(payload, transcript) {
-  const values = [transcript, payload.topic, payload.summary, payload.result, payload.nextStep]
+  const values = [
+    transcript,
+    payload.topic,
+    payload.summary,
+    payload.result,
+    payload.nextStep,
+    payload.wantedSummary,
+    payload.primaryScenario,
+    payload.deliveryDetails
+  ]
     .map((value) => normalizeWhitespace(stringFromUnknown(value)))
     .filter((value) => value !== '');
 
@@ -376,7 +802,7 @@ function validateNormalizedAnalysis(analysis) {
 
   const keys = Object.keys(analysis);
   const missingFields = REQUIRED_FIELDS.filter((field) => !(field in analysis));
-  const extraFields = keys.filter((field) => !REQUIRED_FIELDS.includes(field));
+  const extraFields = keys.filter((field) => !REQUIRED_FIELDS.includes(field) && !OPTIONAL_FIELDS.includes(field));
 
   if (missingFields.length > 0 || extraFields.length > 0) {
     throw new AnalysisNormalizationError(
@@ -434,6 +860,78 @@ function validateNormalizedAnalysis(analysis) {
     tagSet.add(dedupeKey);
   }
 
+  if ('primaryScenario' in analysis && !PRIMARY_SCENARIOS.includes(analysis.primaryScenario)) {
+    throw new AnalysisNormalizationError('Invalid analysis.primaryScenario value', 'ANALYSIS_INVALID_PRIMARY_SCENARIO');
+  }
+
+  if ('wantedSummary' in analysis) {
+    if (typeof analysis.wantedSummary !== 'string' || analysis.wantedSummary.trim() === '') {
+      throw new AnalysisNormalizationError('Invalid analysis.wantedSummary value', 'ANALYSIS_INVALID_WANTED_SUMMARY');
+    }
+
+    if (analysis.wantedSummary.trim().length > TEXT_LIMITS.wantedSummary) {
+      throw new AnalysisNormalizationError('Invalid analysis.wantedSummary length', 'ANALYSIS_INVALID_WANTED_SUMMARY');
+    }
+  }
+
+  if ('partsRequested' in analysis) {
+    if (!Array.isArray(analysis.partsRequested) || analysis.partsRequested.length > 10) {
+      throw new AnalysisNormalizationError('Invalid analysis.partsRequested value', 'ANALYSIS_INVALID_PARTS_REQUESTED');
+    }
+
+    const partKeys = new Set();
+    for (const part of analysis.partsRequested) {
+      if (typeof part !== 'string' || part.trim() === '') {
+        throw new AnalysisNormalizationError('Invalid analysis.partsRequested item', 'ANALYSIS_INVALID_PARTS_REQUESTED');
+      }
+
+      if (part.trim().length > TEXT_LIMITS.partsItem) {
+        throw new AnalysisNormalizationError('Invalid analysis.partsRequested item length', 'ANALYSIS_INVALID_PARTS_REQUESTED');
+      }
+
+      const partKey = part.trim().toLowerCase();
+      if (partKeys.has(partKey)) {
+        throw new AnalysisNormalizationError('Invalid analysis.partsRequested duplicates', 'ANALYSIS_INVALID_PARTS_REQUESTED');
+      }
+
+      partKeys.add(partKey);
+    }
+  }
+
+  for (const fieldName of [
+    'rentalStart',
+    'rentalDuration',
+    'rentalAddress',
+    'repairEquipment',
+    'repairDateOrTerm',
+    'repairAddress',
+    'deliveryDetails',
+    'companyName',
+    'orderNumber'
+  ]) {
+    if (!(fieldName in analysis)) {
+      continue;
+    }
+
+    const fieldValue = analysis[fieldName];
+    const maxLength = TEXT_LIMITS[fieldName];
+
+    if (typeof fieldValue !== 'string' || fieldValue.trim() === '') {
+      throw new AnalysisNormalizationError(`Invalid analysis.${fieldName} value`, `ANALYSIS_INVALID_${fieldName.toUpperCase()}`);
+    }
+
+    if (maxLength && fieldValue.trim().length > maxLength) {
+      throw new AnalysisNormalizationError(
+        `Invalid analysis.${fieldName} length`,
+        `ANALYSIS_INVALID_${fieldName.toUpperCase()}`
+      );
+    }
+  }
+
+  if ('repairType' in analysis && !REPAIR_TYPES.includes(analysis.repairType)) {
+    throw new AnalysisNormalizationError('Invalid analysis.repairType value', 'ANALYSIS_INVALID_REPAIR_TYPE');
+  }
+
   if (typeof analysis.confidence !== 'number' || !Number.isFinite(analysis.confidence) || analysis.confidence < 0 || analysis.confidence > 1) {
     throw new AnalysisNormalizationError('Invalid analysis.confidence value', 'ANALYSIS_INVALID_CONFIDENCE');
   }
@@ -479,6 +977,31 @@ function normalizeAndValidateAnalysis(payload, options = {}) {
   const urgency = normalizeUrgency(payload.urgency, contextText);
   const tags = normalizeTags(payload.tags, category);
   const confidence = normalizeConfidence(payload.confidence);
+  const primaryScenario = normalizePrimaryScenario(payload.primaryScenario, category, contextText);
+  const wantedSummary = normalizeWantedSummary(payload.wantedSummary, [
+    payload.summary,
+    payload.result,
+    summary,
+    result
+  ]);
+  const partsRequested = normalizeUniqueStringArray(payload.partsRequested, {
+    maxLength: TEXT_LIMITS.partsItem,
+    maxItems: 10
+  });
+  const rentalStart = applyFuzzyRelativeDateGuard(payload.rentalStart, transcript, TEXT_LIMITS.rentalStart);
+  const rentalDuration = normalizeOptionalText(payload.rentalDuration, TEXT_LIMITS.rentalDuration);
+  const rentalAddress = normalizeOptionalText(payload.rentalAddress, TEXT_LIMITS.rentalAddress);
+  const repairEquipment = normalizeOptionalText(payload.repairEquipment, TEXT_LIMITS.repairEquipment);
+  const repairDateOrTerm = applyFuzzyRelativeDateGuard(
+    payload.repairDateOrTerm,
+    transcript,
+    TEXT_LIMITS.repairDateOrTerm
+  );
+  const repairType = normalizeRepairType(payload.repairType);
+  const repairAddress = normalizeOptionalText(payload.repairAddress, TEXT_LIMITS.repairAddress);
+  const deliveryDetails = normalizeOptionalText(payload.deliveryDetails, TEXT_LIMITS.deliveryDetails);
+  const companyName = normalizeOptionalText(payload.companyName, TEXT_LIMITS.companyName);
+  const orderNumber = normalizeOptionalText(payload.orderNumber, TEXT_LIMITS.orderNumber);
 
   const normalized = {
     category,
@@ -488,8 +1011,54 @@ function normalizeAndValidateAnalysis(payload, options = {}) {
     nextStep,
     urgency,
     tags,
-    confidence
+    confidence,
+    primaryScenario,
+    wantedSummary
   };
+
+  if (partsRequested.length > 0) {
+    normalized.partsRequested = partsRequested;
+  }
+
+  if (rentalStart) {
+    normalized.rentalStart = rentalStart;
+  }
+
+  if (rentalDuration) {
+    normalized.rentalDuration = rentalDuration;
+  }
+
+  if (rentalAddress) {
+    normalized.rentalAddress = rentalAddress;
+  }
+
+  if (repairEquipment) {
+    normalized.repairEquipment = repairEquipment;
+  }
+
+  if (repairDateOrTerm) {
+    normalized.repairDateOrTerm = repairDateOrTerm;
+  }
+
+  if (repairType) {
+    normalized.repairType = repairType;
+  }
+
+  if (repairAddress) {
+    normalized.repairAddress = repairAddress;
+  }
+
+  if (deliveryDetails) {
+    normalized.deliveryDetails = deliveryDetails;
+  }
+
+  if (companyName && isCompanyExplicitlyMentioned(companyName, transcript)) {
+    normalized.companyName = companyName;
+  }
+
+  if (orderNumber && isOrderNumberExplicitlyMentioned(orderNumber, transcript)) {
+    normalized.orderNumber = orderNumber;
+  }
 
   validateNormalizedAnalysis(normalized);
 

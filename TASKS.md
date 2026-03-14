@@ -2,10 +2,36 @@
 
 > Each task should be executed with step-by-step validation instructions because the project is being implemented by the user for the first time.
 
-## Ближайшие этапы (актуальный порядок)
+## Active workstream (post-baseline improvements, wave #1)
 
 Source of truth for current YC deploy progress and fixed decisions:
 `DEPLOY_PROGRESS.md`
+
+Current status:
+
+- [x] Production baseline is closed and stabilized
+- [x] Improvement wave #1 is activated
+- [x] Scope for this change set is strictly limited to `Telegram message format v2`
+
+Wave #1 checklist (`Telegram message format v2` only):
+
+- [x] Sync status docs (`DEPLOY_PROGRESS.md`, `TASKS.md`, `README.md`)
+- [x] Switch Telegram runtime output to canonical plain-text v2 format
+- [x] Ensure one call maps to one primary scenario (`Запчасти`, `Аренда`, `Ремонт`, `Доставка`, safe fallback)
+- [x] Ensure `Компания` and `Номер заказа` are optional and printed only when explicitly present
+- [x] Remove old `Следующий шаг` block from Telegram message body
+- [x] Add local smoke verification examples for new format
+
+Explicitly not in this change set:
+
+- [x] ignored numbers changes are out of scope
+- [x] owner routing changes are out of scope
+- [x] Telegram buttons changes are out of scope
+- [x] polling interval changes are out of scope
+- [x] missed-call filtering changes are out of scope
+- [x] topology / production baseline changes are out of scope
+
+## Baseline and Tele2 ops backlog (reference, not active in this change set)
 
 - [x] 1. PostgreSQL refactor verification (schema, migrations, storage behavior, dedup)
 - [x] 2. local smoke test (process-call, healthz, telegram delivery path)

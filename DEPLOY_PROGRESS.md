@@ -1,8 +1,8 @@
 # DEPLOY_PROGRESS.md
 
-Operational progress log for the current Yandex Cloud phase after the successful Polza production cutover.
+Operational progress log for post-baseline work after the successful Polza production cutover.
 
-## Goal of current phase
+## Goal of current phase (post-baseline improvements, wave #1)
 
 Keep the existing production baseline stable after the confirmed Polza cutover:
 
@@ -10,7 +10,8 @@ Keep the existing production baseline stable after the confirmed Polza cutover:
 - keep main app and `ai-gateway` as separate Docker containers on the same VM
 - keep container-to-container routing on user-defined Docker network `t2-app-net`
 - keep PostgreSQL topology unchanged
-- keep Telegram integration unchanged
+- keep Telegram transport/integration unchanged (same bot/chat delivery path)
+- allow only message text format update in the active improvement wave
 - keep `ai-gateway` as the active runtime boundary
 - use Polza as upstream provider
 - do not return the main app runtime to a direct OpenAI path
@@ -34,6 +35,44 @@ These decisions are considered fixed unless explicitly changed:
 - current production main app gateway URL: `http://ai-gateway:3001`
 - host-level VM health check for gateway: `http://127.0.0.1:3001/healthz`
 - `ai-gateway` is not used as a separate public service
+
+## Active workstream (improvement wave #1)
+
+Baseline status:
+
+- production baseline is closed and considered stable
+- topology and production routing are fixed for this wave
+
+Active scope in this change set:
+
+- only `Telegram message format v2` is implemented
+- formatter output is plain text only
+- one call -> one primary scenario (`Запчасти`, `Аренда`, `Ремонт`, `Доставка`, safe fallback)
+- required fields in Telegram message:
+  - `Кто звонил`
+  - `Когда звонил`
+  - `Что хотели`
+  - `Сценарий`
+- optional fields:
+  - `Компания` only if explicitly present in conversation
+  - `Номер заказа` only if explicitly present in conversation
+
+Explicitly out of scope in this change set:
+
+- ignored numbers behavior changes
+- owner routing
+- Telegram buttons
+- polling interval
+- missed-call filtering
+- topology / infrastructure / production baseline changes
+- Tele2 token regeneration proposals
+
+Acceptance criteria for this workstream:
+
+- docs/status synced to the active `Telegram message format v2` scope
+- old `Следующий шаг` block removed from Telegram message
+- scenario `Доставка` is supported as standalone scenario block
+- fuzzy relative date is not converted into invented exact date
 
 ## Already completed
 
@@ -185,7 +224,10 @@ Tele2 pull route (`call-records/info`, `call-records/file`) and manual STT bridg
 Tele2 one-shot polling MVP is validated on VM (`dry-run`, `live-run`, `dedup`).
 Multipart transcription path for long audio is validated in production.
 Scheduled `tele2:poll-once` rollout via systemd service/timer is enabled and validated on VM.
-Next narrow milestone: rollout and verify token refresh + log rotation hardening on VM (without architecture changes).
+Current narrow milestone in post-baseline improvements wave #1:
+
+- implement and verify only `Telegram message format v2`
+- keep all non-format improvements out of scope for this change set
 
 ## Operational warning (Tele2 tokens)
 
@@ -213,12 +255,10 @@ Status:
 
 ## Next steps
 
-1. Deploy refresh-enabled wrapper/helper to VM and set `T2_REFRESH_TOKEN` in `/opt/t2-call-summary/tele2-poll.env`.
-2. Install `ops/logrotate/t2-tele2-poll` on VM (`/etc/logrotate.d/t2-tele2-poll`) and verify forced rotation once.
-3. Verify refresh lifecycle on VM (`preflight refresh`, `403 -> refresh -> one retry`) and confirm no token leakage in logs.
-4. Keep `TELE2_INGEST_ENABLED=false` until Tele2 webhook payload contract is confirmed and explicitly approved for controlled cutover.
-5. Rotate the exposed Polza API key if it has not already been rotated after local testing, then re-run a short production smoke.
-6. Keep lightweight monitoring checks running during scheduled poll-once operations.
+1. Sync docs/status files for active improvement wave #1 (`DEPLOY_PROGRESS.md`, `TASKS.md`, `README.md`).
+2. Roll out canonical Telegram plain-text format v2 in runtime formatter and minimal AI extraction fields.
+3. Verify locally across scenarios (`Запчасти`, `Аренда`, `Ремонт`, `Доставка`) and confirm optional fields behavior.
+4. Keep baseline protections unchanged: no topology changes, no routing changes, no polling/ignored/routing/button changes.
 
 ## Open checks
 
