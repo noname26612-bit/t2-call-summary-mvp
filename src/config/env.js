@@ -10,6 +10,10 @@ const DEFAULT_DB_CONNECT_TIMEOUT_MS = 5000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10000;
 const DEFAULT_T2_TIMEOUT_MS = 10000;
 const DEFAULT_AI_GATEWAY_TIMEOUT_MS = 20000;
+const DEFAULT_TELEGRAM_UPDATES_POLL_TIMEOUT_SEC = 25;
+const DEFAULT_TELEGRAM_UPDATES_IDLE_DELAY_MS = 400;
+const DEFAULT_TELEGRAM_UPDATES_ERROR_DELAY_MS = 3000;
+const DEFAULT_TELEGRAM_UPDATES_MAX_BATCH_SIZE = 25;
 
 function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim() !== '';
@@ -149,7 +153,29 @@ function loadConfig(options = {}) {
         ? getRequiredString('TELEGRAM_CHAT_ID')
         : getOptionalString('TELEGRAM_CHAT_ID', ''),
       apiTimeoutMs: parsePositiveInt('TELEGRAM_API_TIMEOUT_MS', DEFAULT_TELEGRAM_TIMEOUT_MS),
-      webhookSecret: getOptionalString('TELEGRAM_WEBHOOK_SECRET', '')
+      webhookSecret: getOptionalString('TELEGRAM_WEBHOOK_SECRET', ''),
+      polling: {
+        enabled: parseBoolean('TELEGRAM_UPDATES_POLLING_ENABLED', true),
+        timeoutSec: parsePositiveInt(
+          'TELEGRAM_UPDATES_POLL_TIMEOUT_SEC',
+          DEFAULT_TELEGRAM_UPDATES_POLL_TIMEOUT_SEC
+        ),
+        idleDelayMs: parsePositiveInt(
+          'TELEGRAM_UPDATES_POLL_IDLE_DELAY_MS',
+          DEFAULT_TELEGRAM_UPDATES_IDLE_DELAY_MS
+        ),
+        errorDelayMs: parsePositiveInt(
+          'TELEGRAM_UPDATES_POLL_ERROR_DELAY_MS',
+          DEFAULT_TELEGRAM_UPDATES_ERROR_DELAY_MS
+        ),
+        maxBatchSize: parsePositiveInt(
+          'TELEGRAM_UPDATES_POLL_MAX_BATCH_SIZE',
+          DEFAULT_TELEGRAM_UPDATES_MAX_BATCH_SIZE
+        ),
+        offsetKey: getOptionalString('TELEGRAM_UPDATES_OFFSET_KEY', 'transcript_callback'),
+        clearWebhookOnStart: parseBoolean('TELEGRAM_UPDATES_CLEAR_WEBHOOK_ON_START', true),
+        skipBacklogOnFirstStart: parseBoolean('TELEGRAM_UPDATES_SKIP_BACKLOG_ON_FIRST_START', false)
+      }
     },
     t2: {
       ingestEnabled: parseBoolean('TELE2_INGEST_ENABLED', false),

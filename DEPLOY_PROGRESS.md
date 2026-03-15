@@ -12,7 +12,7 @@ Keep the existing production baseline stable after the confirmed Polza cutover:
 - keep PostgreSQL topology unchanged
 - keep Telegram transport/integration unchanged (same bot/chat delivery path + add transcript button flow)
 - keep `Telegram message format v2.1` as completed wave #1 baseline result
-- run a narrow pass for transcript storage + transcript `.txt` delivery from Telegram button
+- run a narrow pass for Telegram callback polling via `getUpdates` (no public webhook dependency)
 - keep `ai-gateway` as the active runtime boundary
 - use Polza as upstream provider
 - do not return the main app runtime to a direct OpenAI path
@@ -37,7 +37,7 @@ These decisions are considered fixed unless explicitly changed:
 - host-level VM health check for gateway: `http://127.0.0.1:3001/healthz`
 - `ai-gateway` is not used as a separate public service
 
-## Active workstream (Transcript storage + Telegram `.txt` button)
+## Active workstream (Telegram callback polling via `getUpdates`)
 
 Baseline status:
 
@@ -49,15 +49,15 @@ Baseline status:
 
 Active scope in this change set:
 
-- store full transcript text once for each analyzed call in DB (no binary file storage in this pass)
-- add inline button `Транскрипт (.txt)` below Telegram summary message
-- on callback, load saved transcript by `call_event_id` and send `.txt` document to the same chat
-- if transcript is missing (historical/edge case), return fallback message without re-transcription
-- enforce analysis gate in polling runtime:
-  - missed calls are skipped
-  - calls with conversation duration `<= 5 sec` are skipped
-  - only calls with conversation duration `> 5 sec` continue to transcription/analysis
-- sync docs/status and smoke examples for the new behavior
+- keep transcript storage + transcript `.txt` send logic as-is (already implemented)
+- keep inline button `Транскрипт (.txt)` UX unchanged
+- receive callback updates through Telegram `getUpdates` polling (primary production path)
+- process only `callback_query` updates with `transcript:<call_event_id>` callback data
+- use persistent offset state to prevent repeated callback processing after restart
+- keep webhook route as optional fallback (do not hard-remove it)
+- remove operational requirement on `PUBLIC_APP_URL`/public HTTPS webhook for transcript button flow
+- keep polling consumer model single-instance for main app in this phase (no multi-instance election in scope)
+- sync docs/status and smoke examples for polling-first behavior
 
 Explicitly out of scope in this change set:
 
@@ -72,11 +72,11 @@ Explicitly out of scope in this change set:
 
 Acceptance criteria for this workstream:
 
-- each analyzed call persists full transcript text in DB
-- summary Telegram message includes inline button for transcript request
-- button callback sends `.txt` from stored transcript without AI re-run
-- missing transcript returns safe fallback message (`Транскрипт для этого звонка не сохранён.`)
-- missed calls and calls with conversation duration `<= 5 sec` are skipped before transcription/analysis
+- summary message still includes inline button `Транскрипт (.txt)`
+- callback updates are received through `getUpdates` without public webhook URL
+- transcript `.txt` is sent from stored `transcript_text` without AI/STT re-run
+- callback polling advances/saves offset and does not re-process already handled updates
+- webhook endpoint remains optional fallback and does not block production use case
 - docs/status and smoke checks are synchronized with this narrow pass
 
 ## Already completed
@@ -269,7 +269,8 @@ Scheduled `tele2:poll-once` rollout via systemd service/timer is enabled and val
 Current narrow milestone in post-baseline improvements wave #1:
 
 - keep `Telegram message format v2.1` as completed baseline milestone
-- execute a narrow transcript pass (storage + button callback + `.txt` delivery)
+- keep transcript storage + `.txt` delivery as completed baseline for transcript feature
+- execute a narrow polling pass for Telegram callback updates via `getUpdates`
 - keep all topology/provider/routing changes out of scope
 
 ## Operational warning (Tele2 tokens)
@@ -298,8 +299,8 @@ Status:
 
 ## Next steps
 
-1. Roll out transcript storage + button callback pass to production main app (main app only).
-2. Run one controlled live verification (`/api/process-call`) and confirm fresh Telegram delivery + transcript `.txt` by button click.
+1. Roll out callback polling pass to production main app (main app only).
+2. Run one controlled live verification (`/api/process-call`) and confirm button click works through `getUpdates` + `.txt` delivery.
 3. Keep SSH baseline stable (`sg-t2-vm` ingress policy + known-good operator access path).
 4. Keep baseline protections unchanged: no topology changes, no routing changes, no polling interval/ignored numbers/owner routing changes.
 

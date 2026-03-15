@@ -45,6 +45,21 @@ function normalizeCallEventId(value) {
   return normalized;
 }
 
+function normalizePositiveInteger(value, fallback = null) {
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) {
+    return value;
+  }
+
+  if (typeof value === 'string' && /^[0-9]+$/.test(value.trim())) {
+    const parsed = Number.parseInt(value.trim(), 10);
+    if (Number.isSafeInteger(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+
+  return fallback;
+}
+
 function buildTranscriptCallbackData(callEventId) {
   const normalizedCallEventId = normalizeCallEventId(callEventId);
   if (!normalizedCallEventId) {
@@ -235,6 +250,53 @@ function createTelegramSender(config, logger) {
     });
   }
 
+  async function getWebhookInfo() {
+    return sendTelegramApiRequest({
+      method: 'getWebhookInfo',
+      jsonBody: {}
+    });
+  }
+
+  async function deleteWebhook({ dropPendingUpdates = false } = {}) {
+    return sendTelegramApiRequest({
+      method: 'deleteWebhook',
+      jsonBody: {
+        drop_pending_updates: dropPendingUpdates === true
+      }
+    });
+  }
+
+  async function getUpdates({
+    offset = null,
+    timeoutSec = 25,
+    limit = 25,
+    allowedUpdates = ['callback_query']
+  } = {}) {
+    const normalizedTimeoutSec = normalizePositiveInteger(timeoutSec, 25);
+    const normalizedLimit = normalizePositiveInteger(limit, 25);
+    const normalizedOffset = normalizePositiveInteger(offset, null);
+
+    const body = {
+      timeout: Math.min(normalizedTimeoutSec, 50),
+      limit: Math.min(normalizedLimit, 100)
+    };
+
+    if (normalizedOffset !== null) {
+      body.offset = normalizedOffset;
+    }
+
+    if (Array.isArray(allowedUpdates)) {
+      body.allowed_updates = allowedUpdates
+        .filter((item) => isNonEmptyString(item))
+        .map((item) => item.trim());
+    }
+
+    return sendTelegramApiRequest({
+      method: 'getUpdates',
+      jsonBody: body
+    });
+  }
+
   async function sendTelegramMessage({ callEventId, phone, callDateTime, analysis }) {
     const text = formatTelegramCallSummary({
       phone,
@@ -267,6 +329,9 @@ function createTelegramSender(config, logger) {
   sendTelegramMessage.sendTextMessage = sendTextMessage;
   sendTelegramMessage.sendTextDocument = sendTextDocument;
   sendTelegramMessage.answerCallbackQuery = answerCallbackQuery;
+  sendTelegramMessage.getWebhookInfo = getWebhookInfo;
+  sendTelegramMessage.deleteWebhook = deleteWebhook;
+  sendTelegramMessage.getUpdates = getUpdates;
   sendTelegramMessage.defaultChatId = defaultChatId;
 
   return sendTelegramMessage;

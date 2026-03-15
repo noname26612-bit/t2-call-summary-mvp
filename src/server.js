@@ -10,6 +10,7 @@ const { createTelegramSender } = require('./services/sendTelegramMessage');
 const { createCallProcessor, validateCallPayload } = require('./services/callProcessor');
 const { createT2IngestService } = require('./services/t2IngestService');
 const { createTelegramTranscriptService } = require('./services/telegramTranscriptService');
+const { createTelegramUpdatePollingService } = require('./services/telegramUpdatePollingService');
 
 dotenv.config();
 
@@ -353,7 +354,13 @@ function createApp({
   return app;
 }
 
-function registerGracefulShutdown({ server, storage, logger, shutdownTimeoutMs }) {
+function registerGracefulShutdown({
+  server,
+  storage,
+  logger,
+  shutdownTimeoutMs,
+  beforeStorageClose = null
+}) {
   let shuttingDown = false;
 
   const shutdown = (signal) => {
@@ -382,6 +389,10 @@ function registerGracefulShutdown({ server, storage, logger, shutdownTimeoutMs }
       }
 
       try {
+        if (typeof beforeStorageClose === 'function') {
+          await beforeStorageClose(signal);
+        }
+
         await storage.close();
         logger.info('shutdown_finished', {
           signal
@@ -466,6 +477,14 @@ async function bootstrap() {
     logger: logger.child({ component: 'call_processor' })
   });
 
+  const telegramUpdatePolling = createTelegramUpdatePollingService({
+    storage,
+    telegramSender: sendTelegramMessage,
+    handleTelegramUpdate,
+    logger: logger.child({ component: 'telegram_polling' }),
+    config: config.telegram.polling
+  });
+
   const { ingestT2Call } = createT2IngestService({
     processCall,
     adapterConfig: config.t2.adapter,
@@ -490,13 +509,20 @@ async function bootstrap() {
       timezone: config.appTimezone,
       nodeEnv: config.nodeEnv
     });
+
+    const pollingStart = telegramUpdatePolling.start();
+    logger.info('telegram_polling_start_result', pollingStart);
   });
 
   registerGracefulShutdown({
     server,
     storage,
     logger,
-    shutdownTimeoutMs: config.shutdownTimeoutMs
+    shutdownTimeoutMs: config.shutdownTimeoutMs,
+    beforeStorageClose: async () => {
+      const stopResult = await telegramUpdatePolling.stop();
+      logger.info('telegram_polling_stop_result', stopResult);
+    }
   });
 }
 

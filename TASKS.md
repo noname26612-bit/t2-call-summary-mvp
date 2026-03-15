@@ -2,7 +2,7 @@
 
 > Each task should be executed with step-by-step validation instructions because the project is being implemented by the user for the first time.
 
-## Active workstream (Transcript storage + Telegram `.txt` button, `2026-03-15`)
+## Active workstream (Telegram callback polling via `getUpdates`, `2026-03-15`)
 
 Source of truth for current YC deploy progress and fixed decisions:
 `DEPLOY_PROGRESS.md`
@@ -13,22 +13,22 @@ Current status:
 - [x] Improvement wave #1 is activated
 - [x] `Telegram message format v2.1` rollout is completed and live-verified
 - [x] Post-incident hardening rollout is completed as separate narrow pass
-- [ ] Transcript storage + `.txt` transcript button pass is in progress
+- [x] Transcript storage + `.txt` transcript button pass is completed locally
+- [ ] Telegram callback polling via `getUpdates` pass is in progress
 
-Transcript button checklist (this change set only):
+Callback polling checklist (this change set only):
 
 - [x] Sync status docs (`DEPLOY_PROGRESS.md`, `TASKS.md`, `README.md`)
-- [x] Persist full transcript text once in DB for analyzed calls
-- [x] Keep one analyzed call = one stored transcript (reuse, no re-transcription on click)
-- [x] Add Telegram inline button `Транскрипт (.txt)` to summary message
-- [x] Add callback handling that resolves `call_event_id` and sends `.txt` document
-- [x] Add safe fallback when transcript is missing (`Транскрипт для этого звонка не сохранён.`)
-- [x] Enforce skip-policy in poll runtime:
-  - missed calls are skipped
-  - conversation duration `<= 5 sec` is skipped
-  - only duration `> 5 sec` continues to transcription/analysis
-- [x] Add/refresh local smoke checks for transcript button flow
-- [ ] Run production verification with one fresh call + transcript button click
+- [x] Keep existing transcript storage/send logic unchanged (no re-transcription on click)
+- [x] Keep button UX label `Транскрипт (.txt)` unchanged
+- [x] Add Telegram `getUpdates` polling path for callback updates (`callback_query` only)
+- [x] Handle only transcript callbacks (`transcript:<call_event_id>`)
+- [x] Add persistent offset storage for Telegram updates (offset-based, no duplicate processing after restart)
+- [x] Offset advances only after successful callback handling (no batch pre-commit over failed callback)
+- [x] Document single-instance polling assumption for main app runtime
+- [x] Keep webhook endpoint as optional fallback (no breaking removal)
+- [x] Add/refresh local smoke checks for polling path
+- [ ] Run production verification with one fresh call + real button click (polling path)
 
 Explicitly not in this change set:
 

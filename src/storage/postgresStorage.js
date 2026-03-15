@@ -27,6 +27,21 @@ function normalizeTranscriptText(transcript) {
   return transcript.trim();
 }
 
+function normalizePositiveInteger(value, fallback = 0) {
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) {
+    return value;
+  }
+
+  if (typeof value === 'string' && /^[0-9]+$/.test(value.trim())) {
+    const parsed = Number.parseInt(value.trim(), 10);
+    if (Number.isSafeInteger(parsed) && parsed >= 0) {
+      return parsed;
+    }
+  }
+
+  return fallback;
+}
+
 function buildPostgresStorage({ pool, logger }) {
   async function healthcheck() {
     await pool.query('SELECT 1');
@@ -331,6 +346,58 @@ function buildPostgresStorage({ pool, logger }) {
     };
   }
 
+  async function getTelegramUpdateOffset({ botKey = 'default' } = {}) {
+    const result = await pool.query(
+      `
+      SELECT last_update_id
+      FROM telegram_update_offsets
+      WHERE bot_key = $1
+      LIMIT 1
+      `,
+      [botKey]
+    );
+
+    if (result.rowCount === 0) {
+      return {
+        botKey,
+        lastUpdateId: 0
+      };
+    }
+
+    return {
+      botKey,
+      lastUpdateId: normalizePositiveInteger(result.rows[0].last_update_id, 0)
+    };
+  }
+
+  async function saveTelegramUpdateOffset({ botKey = 'default', lastUpdateId }) {
+    const normalizedOffset = normalizePositiveInteger(lastUpdateId, -1);
+    if (normalizedOffset < 0) {
+      throw new Error('lastUpdateId must be a non-negative integer');
+    }
+
+    await pool.query(
+      `
+      INSERT INTO telegram_update_offsets (
+        bot_key,
+        last_update_id,
+        updated_at
+      )
+      VALUES ($1, $2, NOW())
+      ON CONFLICT (bot_key)
+      DO UPDATE
+      SET last_update_id = EXCLUDED.last_update_id,
+          updated_at = NOW()
+      `,
+      [botKey, normalizedOffset]
+    );
+
+    return {
+      botKey,
+      lastUpdateId: normalizedOffset
+    };
+  }
+
   return {
     healthcheck,
     close,
@@ -344,6 +411,8 @@ function buildPostgresStorage({ pool, logger }) {
     acquireDedupKey,
     completeDedupKey,
     getCallTranscriptByEventId,
+    getTelegramUpdateOffset,
+    saveTelegramUpdateOffset,
     pool,
     logger
   };

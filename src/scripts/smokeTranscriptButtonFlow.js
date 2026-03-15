@@ -100,6 +100,18 @@ async function run() {
     assert.ok(transcriptText.includes('Категория: Запчасти'));
     assert.ok(transcriptText.includes('Транскрипт:'));
 
+    const pollingResult = await sender.getUpdates({
+      offset: 42,
+      timeoutSec: 5,
+      limit: 10,
+      allowedUpdates: ['callback_query']
+    });
+
+    assert.equal(pollingResult.status, 'sent');
+    assert.equal(requests.length, 3);
+    assert.ok(String(requests[2].url).endsWith('/getUpdates'));
+    assert.equal(JSON.parse(requests[2].options.body).offset, 42);
+
     process.stdout.write('Smoke transcript button flow: OK\n');
     process.stdout.write(`Missing transcript fallback message: ${MISSING_TRANSCRIPT_TEXT}\n`);
   } finally {
