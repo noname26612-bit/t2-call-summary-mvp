@@ -2,7 +2,7 @@
 
 > Each task should be executed with step-by-step validation instructions because the project is being implemented by the user for the first time.
 
-## Active workstream (post-incident hardening, `2026-03-14`)
+## Active workstream (Telegram message format v2.1 final refinement, `2026-03-15`)
 
 Source of truth for current YC deploy progress and fixed decisions:
 `DEPLOY_PROGRESS.md`
@@ -11,24 +11,29 @@ Current status:
 
 - [x] Production baseline is closed and stabilized
 - [x] Improvement wave #1 is activated
-- [x] `Telegram message format v2` rollout is completed
+- [x] `Telegram message format v2.1` base rollout is completed and live-verified
 - [x] Production incident root cause is localized (`T2_API_TOKEN` / `T2_REFRESH_TOKEN` in poller env)
 - [x] Manual mitigation is completed (token pair restored, poller success, SSH access restored)
+- [x] Post-incident hardening rollout is completed as separate narrow pass
 
-Hardening checklist (this change set only):
+v2.1 final refinement checklist (this change set only):
 
 - [x] Sync status docs (`DEPLOY_PROGRESS.md`, `TASKS.md`, `README.md`)
-- [x] Add fail-fast startup guard in poller wrapper for required Tele2 auth env:
-  - `T2_API_TOKEN` (or fallback `T2_ACCESS_TOKEN`)
-  - `T2_REFRESH_TOKEN`
-- [x] Add explicit runtime signaling for token/env/auth failures (structured logs + stable non-zero exits)
-- [x] Document token recovery and post-fix verification runbook
-- [x] Document SSH/SG access baseline to keep operator access during incidents
-- [ ] Roll out hardening wrapper/docs to production VM and capture verification logs
+- [x] Replace visible label `Сценарий` -> `Категория`
+- [x] Keep compact message blocks with blank lines:
+  - `Кто звонил`
+  - `Когда звонил`
+  - `Что хотели`
+  - `Категория`
+- [x] Keep `Компания` and `Номер заказа` inside `Что хотели` when explicitly mentioned
+- [x] Also print `Компания:` / `Номер заказа:` as separate lines only when explicitly mentioned
+- [x] Filter status-like operational tails from `Что хотели` (`принят`, `зарегистрирован`, `взято в работу`, `обработано`)
+- [x] Preserve legitimate client status questions (`статус заказа`, `статус готовности`)
+- [x] Update smoke checks for new canonical shape
+- [ ] Roll out final v2.1 refinement to production VM and capture one fresh live verification
 
 Explicitly not in this change set:
 
-- [x] Telegram format changes are out of scope
 - [x] ignored numbers changes are out of scope
 - [x] owner routing changes are out of scope
 - [x] Telegram buttons changes are out of scope

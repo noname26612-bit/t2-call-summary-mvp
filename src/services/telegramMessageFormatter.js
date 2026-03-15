@@ -189,12 +189,25 @@ function lineLooksLikeStatus(rawLine) {
     return false;
   }
 
+  if (
+    /статус\s+(заказа|готовности|доставки|ремонта|отгрузки|станка)/.test(line) ||
+    /уточн(яет|ить).+статус/.test(line) ||
+    /спрос(ил|ила|ить).+статус/.test(line)
+  ) {
+    return false;
+  }
+
   return (
     /^результат[:\s]/.test(line) ||
     /^статус[:\s]/.test(line) ||
     /^следующий шаг[:\s]/.test(line) ||
     /^(заявка|запрос)\s+(принят|принята|зафиксирован|зафиксирована)\b/.test(line) ||
+    /\b(заявк[аеиу]|запрос[аеиу]?|обращени[ея])\b.{0,80}\b(принят[аоы]?|зарегистрирован[аоы]?|взят[аоы]?\s+в\s+работу|обработан[аоы]?|оформлен[аоы]?)\b/.test(line) ||
+    /\b(принят[аоы]?|зарегистрирован[аоы]?|взят[аоы]?\s+в\s+работу|обработан[аоы]?|оформлен[аоы]?)\b.{0,80}\b(заявк[аеиу]|запрос[аеиу]?|обращени[ея])\b/.test(line) ||
     /требуется\s+дальнейшая\s+обработк/.test(line) ||
+    /взято?\s+в\s+работу/.test(line) ||
+    /зарегистрирован(о|а|ы)?/.test(line) ||
+    /\bобработан(о|а|ы)?\b/.test(line) ||
     /ключевые\s+детали\s+уточняются/.test(line)
   );
 }
@@ -250,6 +263,24 @@ function appendOptionalDetailsToWantedText(wantedText, { companyName, orderNumbe
   return normalizeSingleLine(`${wantedText}${separator}${suffix}`);
 }
 
+function stripStatusSentences(rawText) {
+  const chunks = sentenceChunks(rawText);
+  if (chunks.length === 0) {
+    return normalizeSingleLine(rawText);
+  }
+
+  const kept = chunks.filter((chunk) => !lineLooksLikeStatus(chunk));
+  if (kept.length === 0) {
+    return '';
+  }
+
+  return kept
+    .slice(0, 2)
+    .map((chunk) => (/[.!?]$/.test(chunk) ? chunk : `${chunk}.`))
+    .join(' ')
+    .trim();
+}
+
 function buildWantedText(analysis, { companyName, orderNumber }) {
   const fromWantedSummary = normalizeWantedLines(analysis?.wantedSummary);
   const fallbackCandidates = [
@@ -274,9 +305,12 @@ function buildWantedText(analysis, { companyName, orderNumber }) {
   const withoutStatusLines = unique.filter((line) => !lineLooksLikeStatus(line));
   const selected = (withoutStatusLines.length > 0 ? withoutStatusLines : unique).slice(0, 2);
 
-  let wantedText = selected.join(' ');
+  let wantedText = stripStatusSentences(selected.join(' '));
   if (!wantedText) {
-    wantedText = normalizeSingleLine(analysis?.summary) || 'Запрос клиента зафиксирован.';
+    wantedText = stripStatusSentences(normalizeSingleLine(analysis?.summary));
+  }
+  if (!wantedText) {
+    wantedText = 'Запрос клиента зафиксирован.';
   }
 
   return appendOptionalDetailsToWantedText(wantedText, { companyName, orderNumber });
@@ -299,6 +333,18 @@ function formatTelegramCallSummary({ phone, callDateTime, analysis, timeZone = '
     '',
     `Категория: ${primaryScenario}`
   ];
+
+  if (companyName || orderNumber) {
+    lines.push('');
+  }
+
+  if (companyName) {
+    lines.push(`Компания: ${companyName}`);
+  }
+
+  if (orderNumber) {
+    lines.push(`Номер заказа: ${orderNumber}`);
+  }
 
   while (lines.length > 0 && lines[lines.length - 1] === '') {
     lines.pop();

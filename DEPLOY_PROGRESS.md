@@ -11,8 +11,8 @@ Keep the existing production baseline stable after the confirmed Polza cutover:
 - keep container-to-container routing on user-defined Docker network `t2-app-net`
 - keep PostgreSQL topology unchanged
 - keep Telegram transport/integration unchanged (same bot/chat delivery path)
-- keep `Telegram message format v2` as completed wave #1 result
-- run a narrow post-incident hardening pass for Tele2 poller auth/env and ops access baseline
+- keep `Telegram message format v2.1` as completed wave #1 baseline result
+- run a narrow final refinement pass for `Telegram message format v2.1` (company/order display + status-tail filtering)
 - keep `ai-gateway` as the active runtime boundary
 - use Polza as upstream provider
 - do not return the main app runtime to a direct OpenAI path
@@ -37,32 +37,33 @@ These decisions are considered fixed unless explicitly changed:
 - host-level VM health check for gateway: `http://127.0.0.1:3001/healthz`
 - `ai-gateway` is not used as a separate public service
 
-## Active workstream (post-incident hardening pass)
+## Active workstream (Telegram message format v2.1 final refinement)
 
 Baseline status:
 
 - production baseline is closed and considered stable
 - topology and production routing are fixed
-- `Telegram message format v2` rollout is completed
+- `Telegram message format v2.1` base rollout is completed
 - production incident on `2026-03-14` is manually mitigated
+- post-incident hardening for Tele2 poller auth/env is deployed as separate narrow pass
 
 Active scope in this change set:
 
-- add fail-fast guard for required poller auth env vars:
-  - `T2_API_TOKEN` (`T2_ACCESS_TOKEN` accepted as backward-compatible fallback)
-  - `T2_REFRESH_TOKEN`
-- add explicit structured logging for auth/env failure classes:
-  - missing access token
-  - missing refresh token
-  - invalid/unparseable access token
-  - expired token when refresh is disabled
-  - preflight refresh failure abort
-- keep a simple, beginner-friendly production verification workflow in docs
-- sync docs/runbooks for incident recovery and SSH/SG baseline access
+- keep visible message shape strictly:
+  - `Кто звонил`
+  - `Когда звонил`
+  - blank line
+  - `Что хотели`
+  - blank line
+  - `Категория`
+- print `Компания:` and `Номер заказа:` as separate lines only when explicitly mentioned
+- keep company/order naturally inside `Что хотели` when explicitly mentioned
+- filter status-like operational tails from `Что хотели` (accepted/registered/in work/processed)
+- keep client-side status inquiries intact (`статус заказа`, `статус готовности`)
+- sync docs and smoke checks to canonical v2.1 refinement
 
 Explicitly out of scope in this change set:
 
-- Telegram message format changes
 - ignored numbers behavior changes
 - owner routing
 - Telegram buttons
@@ -74,10 +75,11 @@ Explicitly out of scope in this change set:
 
 Acceptance criteria for this workstream:
 
-- wrapper does not run with empty Tele2 auth env and exits with explicit reason
-- auth/env failure logs are distinguishable without deep journal parsing
-- docs/status reflect incident root cause and current healthy state
-- docs include exact post-fix verification commands and expected success signatures
+- visible output has canonical v2.1 refined structure with required blank lines
+- no legacy/status labels leak to Telegram message
+- `Компания:`/`Номер заказа:` appear only with explicit mention and without inference
+- status-like operational tails are removed from `Что хотели`
+- docs/status and smoke checks are synchronized with the refined format
 
 ## Already completed
 
@@ -244,7 +246,7 @@ Current state after mitigation:
 
 ## Current production image tags (active)
 
-- main app: `t2-call-summary:prod-v5-tele2-adapter-amd64`
+- main app: `t2-call-summary:local-main-9241a3949f02-20260314223942`
 - gateway: `ai-gateway:prod-v6-stt-compare-amd64`
 
 ## Current production routing note
@@ -268,8 +270,8 @@ Multipart transcription path for long audio is validated in production.
 Scheduled `tele2:poll-once` rollout via systemd service/timer is enabled and validated on VM.
 Current narrow milestone in post-baseline improvements wave #1:
 
-- keep `Telegram message format v2` as completed milestone
-- execute a narrow post-incident hardening pass for Tele2 poller auth/env and ops access baseline
+- keep `Telegram message format v2.1` as completed baseline milestone
+- execute a narrow final refinement pass for `v2.1` (company/order lines + status-tail filtering)
 - keep all topology/provider/routing changes out of scope
 
 ## Operational warning (Tele2 tokens)
@@ -298,11 +300,8 @@ Status:
 
 ## Next steps
 
-1. Roll out poller hardening changes (fail-fast auth/env guards + explicit logs) to VM.
-2. Run production post-fix verification sequence:
-   - service/timer status
-   - journal error signatures absent
-   - successful `poll_once_finished` with `exitCode=0`
+1. Roll out final `Telegram message format v2.1` refinement to production main app (main app only).
+2. Run one controlled live verification (`/api/process-call`) and confirm fresh Telegram delivery shape.
 3. Keep SSH baseline stable (`sg-t2-vm` ingress policy + known-good operator access path).
 4. Keep baseline protections unchanged: no topology changes, no routing changes, no polling interval/ignored numbers/owner routing/buttons changes.
 

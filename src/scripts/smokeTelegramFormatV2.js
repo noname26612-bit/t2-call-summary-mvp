@@ -21,8 +21,6 @@ const BASE_ANALYSIS = {
 const FORBIDDEN_SNIPPETS = [
   'Следующий шаг:',
   'Сценарий:',
-  'Компания:',
-  'Номер заказа:',
   'Тема:',
   'Сводка:',
   'Результат:',
@@ -43,15 +41,18 @@ const CASES = [
       category: 'запчасти',
       primaryScenario: 'Запчасти',
       wantedSummary:
-        'Клиент запросил запчасти для текущего заказа.\nНужно подтвердить наличие и сроки поставки.',
+        'Клиент запросил запчасти для текущего заказа.\nЗапрос на запчасти принят и зарегистрирован.',
       partsRequested: ['ролики направляющие', 'подшипник', 'подшипник'],
       companyName: 'ООО "Станок 77"',
       orderNumber: '№100'
     },
     expected: {
       category: 'Запчасти',
+      hasCompanyLine: true,
+      hasOrderLine: true,
       wantedMustContain: ['ООО "Станок 77"'],
-      wantedMustMatch: [/номер заказа\s*(№\s*)?100/i]
+      wantedMustMatch: [/номер заказа\s*(№\s*)?100/i],
+      wantedMustNotMatch: [/\bпринят\b/i, /\bзарегистрирован/i, /\bвзят[аоы]?\s+в\s+работу/i]
     }
   },
   {
@@ -69,6 +70,8 @@ const CASES = [
     },
     expected: {
       category: 'Аренда',
+      hasCompanyLine: false,
+      hasOrderLine: false,
       rentalStartEquals: '17.03.2026'
     }
   },
@@ -85,6 +88,8 @@ const CASES = [
     },
     expected: {
       category: 'Аренда',
+      hasCompanyLine: false,
+      hasOrderLine: false,
       rentalStartContains: 'примерно через 2-3 недели'
     }
   },
@@ -105,6 +110,8 @@ const CASES = [
     },
     expected: {
       category: 'Ремонт',
+      hasCompanyLine: false,
+      hasOrderLine: false,
       companyDropped: true,
       orderDropped: true
     }
@@ -121,7 +128,9 @@ const CASES = [
       deliveryDetails: 'до 20:00, разгрузка на складе клиента'
     },
     expected: {
-      category: 'Доставка'
+      category: 'Доставка',
+      hasCompanyLine: false,
+      hasOrderLine: false
     }
   },
   {
@@ -135,7 +144,9 @@ const CASES = [
       result: 'Нужно уточнение деталей.'
     },
     expected: {
-      category: 'Другое'
+      category: 'Другое',
+      hasCompanyLine: false,
+      hasOrderLine: false
     }
   }
 ];
@@ -167,8 +178,21 @@ function validateMessage({ title, message, normalized, expected }) {
     errors.push(`${title}: expected empty line between "Что хотели" and "Категория"`);
   }
 
-  if (message.includes('\nКомпания: ') || message.includes('\nНомер заказа: ')) {
-    errors.push(`${title}: company/order must stay inside "Что хотели", not separate lines`);
+  const hasCompanyLine = message.includes('\nКомпания: ');
+  const hasOrderLine = message.includes('\nНомер заказа: ');
+
+  if (typeof expected.hasCompanyLine === 'boolean' && expected.hasCompanyLine !== hasCompanyLine) {
+    errors.push(`${title}: company line mismatch (expected ${expected.hasCompanyLine}, got ${hasCompanyLine})`);
+  }
+
+  if (typeof expected.hasOrderLine === 'boolean' && expected.hasOrderLine !== hasOrderLine) {
+    errors.push(`${title}: order line mismatch (expected ${expected.hasOrderLine}, got ${hasOrderLine})`);
+  }
+
+  if (hasCompanyLine || hasOrderLine) {
+    if (!/Категория:[^\n]*\n\n(Компания:|Номер заказа:)/m.test(message)) {
+      errors.push(`${title}: expected empty line before company/order block`);
+    }
   }
 
   if (expected.rentalStartEquals && normalized.rentalStart !== expected.rentalStartEquals) {
@@ -201,6 +225,14 @@ function validateMessage({ title, message, normalized, expected }) {
     for (const pattern of expected.wantedMustMatch) {
       if (!pattern.test(message)) {
         errors.push(`${title}: "Что хотели" should match ${pattern}`);
+      }
+    }
+  }
+
+  if (Array.isArray(expected.wantedMustNotMatch)) {
+    for (const pattern of expected.wantedMustNotMatch) {
+      if (pattern.test(message)) {
+        errors.push(`${title}: "Что хотели" should not include status-like phrase ${pattern}`);
       }
     }
   }
