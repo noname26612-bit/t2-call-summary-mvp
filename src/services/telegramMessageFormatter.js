@@ -28,6 +28,35 @@ const PRIMARY_SCENARIO_BY_CATEGORY = Object.freeze({
   прочее: 'Другое'
 });
 
+const DELIVERY_SIGNAL_TOKENS = Object.freeze([
+  'доставк',
+  'логист',
+  'самовывоз',
+  'загруз',
+  'погруз',
+  'разгруз',
+  'автопогруз',
+  'отгруз',
+  'вывоз',
+  'привоз',
+  'приезд',
+  'приех',
+  'время загрузк',
+  'время приезд',
+  'организац доставки'
+]);
+
+const REPAIR_SIGNAL_TOKENS = Object.freeze([
+  'ремонт',
+  'полом',
+  'неисправ',
+  'почин',
+  'диагност',
+  'мастер',
+  'сервисный выезд',
+  'выездной ремонт'
+]);
+
 const EMPTY_OPTIONAL_TEXT_TOKENS = new Set([
   '-',
   '—',
@@ -110,11 +139,6 @@ function resolvePrimaryScenario(analysis) {
     return PRIMARY_SCENARIO_ALIASES[normalizedToken];
   }
 
-  const categoryToken = normalizeScenarioToken(analysis?.category);
-  if (categoryToken && PRIMARY_SCENARIO_BY_CATEGORY[categoryToken]) {
-    return PRIMARY_SCENARIO_BY_CATEGORY[categoryToken];
-  }
-
   const contextText = [
     normalizeSingleLine(analysis?.wantedSummary),
     normalizeSingleLine(analysis?.summary),
@@ -131,12 +155,30 @@ function resolvePrimaryScenario(analysis) {
     return 'Аренда';
   }
 
-  if (contextText.includes('доставк') || contextText.includes('логист') || contextText.includes('самовывоз')) {
+  const hasDeliverySignal = DELIVERY_SIGNAL_TOKENS.some((token) => contextText.includes(token));
+  const hasRepairSignal = REPAIR_SIGNAL_TOKENS.some((token) => contextText.includes(token));
+
+  const categoryToken = normalizeScenarioToken(analysis?.category);
+  if (categoryToken === 'сервис' || categoryToken === 'service') {
+    if (hasDeliverySignal && !hasRepairSignal) {
+      return 'Доставка';
+    }
+
+    if (hasRepairSignal) {
+      return 'Ремонт';
+    }
+  }
+
+  if (hasDeliverySignal && !hasRepairSignal) {
     return 'Доставка';
   }
 
-  if (contextText.includes('ремонт') || contextText.includes('сервис') || contextText.includes('неисправ')) {
+  if (hasRepairSignal || contextText.includes('сервис')) {
     return 'Ремонт';
+  }
+
+  if (categoryToken && PRIMARY_SCENARIO_BY_CATEGORY[categoryToken]) {
+    return PRIMARY_SCENARIO_BY_CATEGORY[categoryToken];
   }
 
   return 'Другое';

@@ -117,6 +117,42 @@ const CASES = [
     }
   },
   {
+    title: 'Category mapping: logistics signals must win over generic service category',
+    transcript:
+      'Подскажите готовность станка, время работы и организацию загрузки. Нужен автопогрузчик и отгрузка сегодня.',
+    payload: {
+      category: 'сервис',
+      topic: 'Доставка и загрузка станка',
+      summary:
+        'Клиент уточняет время приезда, загрузки и организацию доставки с автопогрузчиком.',
+      wantedSummary:
+        'Нужна доставка, отгрузка и загрузка станка.\nКлиент запросил время приезда и работу автопогрузчика.'
+    },
+    expected: {
+      category: 'Доставка',
+      hasCompanyLine: false,
+      hasOrderLine: false
+    }
+  },
+  {
+    title: 'Category mapping: real repair signals must stay in repair',
+    transcript:
+      'Станок сломался, нужна диагностика неисправности и выездной мастер для ремонта.',
+    payload: {
+      category: 'сервис',
+      topic: 'Поломка станка',
+      summary:
+        'Клиент сообщил о поломке, просит диагностику и выездной ремонт.',
+      wantedSummary:
+        'Нужна диагностика неисправности.\nЗапрашивают выезд мастера для ремонта.'
+    },
+    expected: {
+      category: 'Ремонт',
+      hasCompanyLine: false,
+      hasOrderLine: false
+    }
+  },
+  {
     title: 'Доставка as standalone primary scenario',
     transcript:
       'Подтвердите доставку до 20:00 сегодня, разгрузка на складе клиента.',
