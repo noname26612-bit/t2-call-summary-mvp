@@ -2,7 +2,7 @@
 
 > Each task should be executed with step-by-step validation instructions because the project is being implemented by the user for the first time.
 
-## Active workstream (Telegram callback polling via `getUpdates`, `2026-03-15`)
+## Completed workstream (Telegram callback polling via `getUpdates`, `2026-03-15`)
 
 Source of truth for current YC deploy progress and fixed decisions:
 `DEPLOY_PROGRESS.md`
@@ -14,7 +14,7 @@ Current status:
 - [x] `Telegram message format v2.1` rollout is completed and live-verified
 - [x] Post-incident hardening rollout is completed as separate narrow pass
 - [x] Transcript storage + `.txt` transcript button pass is completed locally
-- [ ] Telegram callback polling via `getUpdates` pass is in progress
+- [x] Telegram callback polling via `getUpdates` pass is completed
 
 Callback polling checklist (this change set only):
 
@@ -29,7 +29,11 @@ Callback polling checklist (this change set only):
 - [x] Add safe polling backoff behavior (no tight loop on callback/API failures)
 - [x] Keep webhook endpoint as optional fallback (no breaking removal)
 - [x] Add/refresh local smoke checks for polling path
-- [ ] Run production verification with one fresh call + real button click (polling path)
+- [x] Run production verification with fresh summary + real button click (polling path)
+  - [x] summary message delivered
+  - [x] inline button `Транскрипт (.txt)` visible in Telegram
+  - [x] `.txt` delivered after real button click
+  - [x] transcript file format verified (`Кто звонил`, `Когда звонил`, `Категория`, `Транскрипт`)
 
 Explicitly not in this change set:
 

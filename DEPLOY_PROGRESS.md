@@ -12,7 +12,7 @@ Keep the existing production baseline stable after the confirmed Polza cutover:
 - keep PostgreSQL topology unchanged
 - keep Telegram transport/integration unchanged (same bot/chat delivery path + add transcript button flow)
 - keep `Telegram message format v2.1` as completed wave #1 baseline result
-- run a narrow pass for Telegram callback polling via `getUpdates` (no public webhook dependency)
+- Telegram callback polling via `getUpdates` completed (no public webhook dependency)
 - keep `ai-gateway` as the active runtime boundary
 - use Polza as upstream provider
 - do not return the main app runtime to a direct OpenAI path
@@ -37,7 +37,7 @@ These decisions are considered fixed unless explicitly changed:
 - host-level VM health check for gateway: `http://127.0.0.1:3001/healthz`
 - `ai-gateway` is not used as a separate public service
 
-## Active workstream (Telegram callback polling via `getUpdates`)
+## Completed workstream (Telegram callback polling via `getUpdates`)
 
 Baseline status:
 
@@ -47,7 +47,7 @@ Baseline status:
 - production incident on `2026-03-14` is manually mitigated
 - post-incident hardening for Tele2 poller auth/env is deployed as separate narrow pass
 
-Active scope in this change set:
+Implemented scope in this change set:
 
 - keep transcript storage + transcript `.txt` send logic as-is (already implemented)
 - keep inline button `Транскрипт (.txt)` UX unchanged
@@ -78,6 +78,10 @@ Acceptance criteria for this workstream:
 - callback polling advances/saves offset and does not re-process already handled updates
 - webhook endpoint remains optional fallback and does not block production use case
 - docs/status and smoke checks are synchronized with this narrow pass
+- live verification confirmed on `2026-03-15`:
+  - summary message arrives
+  - inline button `Транскрипт (.txt)` is visible
+  - real button click delivers transcript `.txt` file
 
 ## Already completed
 
@@ -270,7 +274,7 @@ Current narrow milestone in post-baseline improvements wave #1:
 
 - keep `Telegram message format v2.1` as completed baseline milestone
 - keep transcript storage + `.txt` delivery as completed baseline for transcript feature
-- execute a narrow polling pass for Telegram callback updates via `getUpdates`
+- keep Telegram callback updates via `getUpdates` as completed baseline behavior
 - keep all topology/provider/routing changes out of scope
 
 ## Operational warning (Tele2 tokens)
@@ -299,8 +303,8 @@ Status:
 
 ## Next steps
 
-1. Roll out callback polling pass to production main app (main app only).
-2. Run one controlled live verification (`/api/process-call`) and confirm button click works through `getUpdates` + `.txt` delivery.
+1. Keep callback polling path stable in production (`getUpdates` + offset persistence).
+2. Keep periodic operational checks for transcript button flow (`summary -> click -> .txt`) without webhook dependency.
 3. Keep SSH baseline stable (`sg-t2-vm` ingress policy + known-good operator access path).
 4. Keep baseline protections unchanged: no topology changes, no routing changes, no polling interval/ignored numbers/owner routing changes.
 
