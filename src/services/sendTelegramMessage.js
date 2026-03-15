@@ -275,9 +275,11 @@ function createTelegramSender(config, logger) {
     const normalizedTimeoutSec = normalizePositiveInteger(timeoutSec, 25);
     const normalizedLimit = normalizePositiveInteger(limit, 25);
     const normalizedOffset = normalizePositiveInteger(offset, null);
+    const maxTimeoutSecByApiTimeout = Math.max(1, Math.floor(Math.max(timeoutMs - 1500, 1000) / 1000));
+    const effectiveTimeoutSec = Math.min(normalizedTimeoutSec, 50, maxTimeoutSecByApiTimeout);
 
     const body = {
-      timeout: Math.min(normalizedTimeoutSec, 50),
+      timeout: effectiveTimeoutSec,
       limit: Math.min(normalizedLimit, 100)
     };
 

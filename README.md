@@ -333,7 +333,7 @@ Runtime и документация синхронизированы с этим
 - `AI_GATEWAY_TIMEOUT_MS=20000`
 - `TELEGRAM_WEBHOOK_SECRET` (optional, для валидации `X-Telegram-Bot-Api-Secret-Token`)
 - `TELEGRAM_UPDATES_POLLING_ENABLED=true` (primary callback path, no public webhook required)
-- `TELEGRAM_UPDATES_POLL_TIMEOUT_SEC=25`
+- `TELEGRAM_UPDATES_POLL_TIMEOUT_SEC=8`
 - `TELEGRAM_UPDATES_POLL_IDLE_DELAY_MS=400`
 - `TELEGRAM_UPDATES_POLL_ERROR_DELAY_MS=3000`
 - `TELEGRAM_UPDATES_POLL_MAX_BATCH_SIZE=25`
@@ -345,6 +345,7 @@ Runtime и документация синхронизированы с этим
 
 - `TELEGRAM_UPDATES_CLEAR_WEBHOOK_ON_START=true`: на старте main app удаляет активный webhook, чтобы исключить конфликт webhook/getUpdates режимов
 - `TELEGRAM_UPDATES_SKIP_BACKLOG_ON_FIRST_START=false`: не пропускает pending callback updates на первом старте (без потери нажатий)
+- `TELEGRAM_UPDATES_POLL_TIMEOUT_SEC` должен быть меньше `TELEGRAM_API_TIMEOUT_MS` (runtime дополнительно ограничивает timeout автоматически)
 - `INGEST_SHARED_SECRET` (опционально для `POST /api/process-call`, но обязателен если `TELE2_INGEST_ENABLED=true`)
 - `TELE2_INGEST_ENABLED=false` (включать только на controlled rollout)
 - `TELE2_PHONE_FIELD_PATH`, `TELE2_CALL_DATETIME_FIELD_PATH`, `TELE2_TRANSCRIPT_FIELD_PATH` (заполнять только после подтверждения Tele2 payload)

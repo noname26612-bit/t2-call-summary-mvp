@@ -26,6 +26,7 @@ Callback polling checklist (this change set only):
 - [x] Add persistent offset storage for Telegram updates (offset-based, no duplicate processing after restart)
 - [x] Offset advances only after successful callback handling (no batch pre-commit over failed callback)
 - [x] Document single-instance polling assumption for main app runtime
+- [x] Add safe polling backoff behavior (no tight loop on callback/API failures)
 - [x] Keep webhook endpoint as optional fallback (no breaking removal)
 - [x] Add/refresh local smoke checks for polling path
 - [ ] Run production verification with one fresh call + real button click (polling path)
