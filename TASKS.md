@@ -2,7 +2,7 @@
 
 > Each task should be executed with step-by-step validation instructions because the project is being implemented by the user for the first time.
 
-## Active workstream (Telegram message format v2.1 final refinement, `2026-03-15`)
+## Active workstream (Transcript storage + Telegram `.txt` button, `2026-03-15`)
 
 Source of truth for current YC deploy progress and fixed decisions:
 `DEPLOY_PROGRESS.md`
@@ -11,35 +11,33 @@ Current status:
 
 - [x] Production baseline is closed and stabilized
 - [x] Improvement wave #1 is activated
-- [x] `Telegram message format v2.1` base rollout is completed and live-verified
-- [x] Production incident root cause is localized (`T2_API_TOKEN` / `T2_REFRESH_TOKEN` in poller env)
-- [x] Manual mitigation is completed (token pair restored, poller success, SSH access restored)
+- [x] `Telegram message format v2.1` rollout is completed and live-verified
 - [x] Post-incident hardening rollout is completed as separate narrow pass
+- [ ] Transcript storage + `.txt` transcript button pass is in progress
 
-v2.1 final refinement checklist (this change set only):
+Transcript button checklist (this change set only):
 
 - [x] Sync status docs (`DEPLOY_PROGRESS.md`, `TASKS.md`, `README.md`)
-- [x] Replace visible label `Сценарий` -> `Категория`
-- [x] Keep compact message blocks with blank lines:
-  - `Кто звонил`
-  - `Когда звонил`
-  - `Что хотели`
-  - `Категория`
-- [x] Keep `Компания` and `Номер заказа` inside `Что хотели` when explicitly mentioned
-- [x] Also print `Компания:` / `Номер заказа:` as separate lines only when explicitly mentioned
-- [x] Filter status-like operational tails from `Что хотели` (`принят`, `зарегистрирован`, `взято в работу`, `обработано`)
-- [x] Preserve legitimate client status questions (`статус заказа`, `статус готовности`)
-- [x] Update smoke checks for new canonical shape
-- [ ] Roll out final v2.1 refinement to production VM and capture one fresh live verification
+- [x] Persist full transcript text once in DB for analyzed calls
+- [x] Keep one analyzed call = one stored transcript (reuse, no re-transcription on click)
+- [x] Add Telegram inline button `Транскрипт (.txt)` to summary message
+- [x] Add callback handling that resolves `call_event_id` and sends `.txt` document
+- [x] Add safe fallback when transcript is missing (`Транскрипт для этого звонка не сохранён.`)
+- [x] Enforce skip-policy in poll runtime:
+  - missed calls are skipped
+  - conversation duration `<= 5 sec` is skipped
+  - only duration `> 5 sec` continues to transcription/analysis
+- [x] Add/refresh local smoke checks for transcript button flow
+- [ ] Run production verification with one fresh call + transcript button click
 
 Explicitly not in this change set:
 
 - [x] ignored numbers changes are out of scope
 - [x] owner routing changes are out of scope
-- [x] Telegram buttons changes are out of scope
 - [x] polling interval changes are out of scope
-- [x] missed-call filtering changes are out of scope
+- [x] provider/gateway architecture refactor is out of scope
 - [x] topology / production baseline changes are out of scope
+- [x] expensive historical transcript backfill is out of scope
 
 ## Baseline and Tele2 ops backlog (reference, not active in this change set)
 

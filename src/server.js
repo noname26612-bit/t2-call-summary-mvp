@@ -9,6 +9,7 @@ const { createGatewayAnalyzeCall } = require('./services/gatewayAnalyzeCall');
 const { createTelegramSender } = require('./services/sendTelegramMessage');
 const { createCallProcessor, validateCallPayload } = require('./services/callProcessor');
 const { createT2IngestService } = require('./services/t2IngestService');
+const { createTelegramTranscriptService } = require('./services/telegramTranscriptService');
 
 dotenv.config();
 
@@ -57,6 +58,15 @@ function isDryRunEnabled(req) {
   return ['1', 'true', 'yes', 'on'].includes(normalized);
 }
 
+function isTelegramWebhookAuthorized(req, webhookSecret) {
+  if (!isNonEmptyString(webhookSecret)) {
+    return true;
+  }
+
+  const providedSecret = req.get('x-telegram-bot-api-secret-token');
+  return isNonEmptyString(providedSecret) && providedSecret === webhookSecret;
+}
+
 function getTopLevelPayloadKeys(payload) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     return [];
@@ -95,9 +105,11 @@ function createApp({
   storage,
   processCall,
   ingestT2Call,
+  handleTelegramUpdate,
   appTimezone,
   ingestSharedSecret,
-  tele2IngestEnabled
+  tele2IngestEnabled,
+  telegramWebhookSecret
 }) {
   const app = express();
   const tele2Misconfigured = isTele2IngestMisconfigured({
@@ -301,6 +313,31 @@ function createApp({
     }
   });
 
+  app.post('/api/telegram/webhook', async (req, res) => {
+    if (!isTelegramWebhookAuthorized(req, telegramWebhookSecret)) {
+      logger.warn('telegram_webhook_auth_rejected', {
+        requestId: req.requestId,
+        route: '/api/telegram/webhook',
+        hasSecretHeader: isNonEmptyString(req.get('x-telegram-bot-api-secret-token'))
+      });
+
+      return res.status(401).json({
+        error: 'Unauthorized telegram webhook',
+        code: 'TELEGRAM_WEBHOOK_UNAUTHORIZED'
+      });
+    }
+
+    try {
+      const result = await handleTelegramUpdate(req.body || {}, {
+        requestId: req.requestId
+      });
+
+      return res.status(200).json(result);
+    } catch (error) {
+      return sendKnownError(res, error, logger, 'api_telegram_webhook');
+    }
+  });
+
   app.use((err, req, res, next) => {
     if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
       return res.status(400).json({ error: 'Invalid JSON body' });
@@ -415,6 +452,13 @@ async function bootstrap() {
     timeZone: config.appTimezone
   }, logger.child({ component: 'telegram' }));
 
+  const { handleTelegramUpdate } = createTelegramTranscriptService({
+    storage,
+    telegramSender: sendTelegramMessage,
+    timeZone: config.appTimezone,
+    logger: logger.child({ component: 'telegram_transcript' })
+  });
+
   const { processCall } = createCallProcessor({
     storage,
     analyzeCall,
@@ -433,9 +477,11 @@ async function bootstrap() {
     storage,
     processCall,
     ingestT2Call,
+    handleTelegramUpdate,
     appTimezone: config.appTimezone,
     ingestSharedSecret: config.ingest.sharedSecret,
-    tele2IngestEnabled: config.t2.ingestEnabled
+    tele2IngestEnabled: config.t2.ingestEnabled,
+    telegramWebhookSecret: config.telegram.webhookSecret
   });
 
   const server = app.listen(config.port, () => {

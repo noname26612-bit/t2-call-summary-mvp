@@ -19,6 +19,14 @@ function normalizePreview(preview) {
   return preview.trim().slice(0, 240);
 }
 
+function normalizeTranscriptText(transcript) {
+  if (typeof transcript !== 'string') {
+    return '';
+  }
+
+  return transcript.trim();
+}
+
 function buildPostgresStorage({ pool, logger }) {
   async function healthcheck() {
     await pool.query('SELECT 1');
@@ -36,6 +44,7 @@ function buildPostgresStorage({ pool, logger }) {
     callDateTimeRaw,
     transcriptHash,
     transcriptPreview,
+    transcriptText,
     transcriptLength,
     dedupKey
   }) {
@@ -49,11 +58,12 @@ function buildPostgresStorage({ pool, logger }) {
         call_datetime_utc,
         transcript_hash,
         transcript_preview,
+        transcript_text,
         transcript_length,
         dedup_key,
         status
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'received')
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'received')
       RETURNING id
       `,
       [
@@ -64,6 +74,7 @@ function buildPostgresStorage({ pool, logger }) {
         toDateOrNull(callDateTimeRaw),
         transcriptHash,
         normalizePreview(transcriptPreview),
+        normalizeTranscriptText(transcriptText),
         transcriptLength,
         dedupKey
       ]
@@ -288,6 +299,38 @@ function buildPostgresStorage({ pool, logger }) {
     );
   }
 
+  async function getCallTranscriptByEventId({ callEventId }) {
+    const result = await pool.query(
+      `
+      SELECT
+        ce.id,
+        ce.phone_raw,
+        ce.call_datetime_raw,
+        ce.transcript_text,
+        s.category
+      FROM call_events ce
+      LEFT JOIN summaries s ON s.call_event_id = ce.id
+      WHERE ce.id = $1
+      LIMIT 1
+      `,
+      [callEventId]
+    );
+
+    if (result.rowCount === 0) {
+      return null;
+    }
+
+    const row = result.rows[0];
+
+    return {
+      callEventId: String(row.id),
+      phoneRaw: row.phone_raw,
+      callDateTimeRaw: row.call_datetime_raw,
+      transcriptText: typeof row.transcript_text === 'string' ? row.transcript_text : '',
+      category: typeof row.category === 'string' ? row.category : ''
+    };
+  }
+
   return {
     healthcheck,
     close,
@@ -300,6 +343,7 @@ function buildPostgresStorage({ pool, logger }) {
     seedIgnoreList,
     acquireDedupKey,
     completeDedupKey,
+    getCallTranscriptByEventId,
     pool,
     logger
   };

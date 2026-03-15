@@ -93,6 +93,7 @@ function createCallProcessor({ storage, analyzeCall, sendTelegramMessage, logger
       callDateTimeRaw: callDateTime,
       transcriptHash,
       transcriptPreview: buildTranscriptPreview(transcript),
+      transcriptText: transcript,
       transcriptLength: transcript.length,
       dedupKey
     });
@@ -190,6 +191,7 @@ function createCallProcessor({ storage, analyzeCall, sendTelegramMessage, logger
       });
 
       const telegramResult = await sendTelegramMessage({
+        callEventId,
         phone,
         callDateTime,
         analysis

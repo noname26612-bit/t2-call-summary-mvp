@@ -1,5 +1,8 @@
 const { formatTelegramCallSummary } = require('./telegramMessageFormatter');
 
+const TRANSCRIPT_CALLBACK_PREFIX = 'transcript:';
+const TRANSCRIPT_BUTTON_LABEL = 'Транскрипт (.txt)';
+
 class TelegramConfigurationError extends Error {
   constructor(message, code) {
     super(message);
@@ -11,6 +14,44 @@ class TelegramConfigurationError extends Error {
 
 function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim() !== '';
+}
+
+function normalizeChatId(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value);
+  }
+
+  if (!isNonEmptyString(value)) {
+    return '';
+  }
+
+  return value.trim();
+}
+
+function normalizeCallEventId(value) {
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) {
+    return String(value);
+  }
+
+  if (!isNonEmptyString(value)) {
+    return '';
+  }
+
+  const normalized = value.trim();
+  if (!/^[0-9]+$/.test(normalized)) {
+    return '';
+  }
+
+  return normalized;
+}
+
+function buildTranscriptCallbackData(callEventId) {
+  const normalizedCallEventId = normalizeCallEventId(callEventId);
+  if (!normalizedCallEventId) {
+    return '';
+  }
+
+  return `${TRANSCRIPT_CALLBACK_PREFIX}${normalizedCallEventId}`;
 }
 
 function createTelegramSender(config, logger) {
@@ -29,50 +70,51 @@ function createTelegramSender(config, logger) {
   }
 
   const botToken = config.botToken.trim();
-  const chatId = config.chatId.trim();
+  const defaultChatId = config.chatId.trim();
   const timeoutMs = config.apiTimeoutMs;
   const timeZone = isNonEmptyString(config.timeZone) ? config.timeZone.trim() : 'Europe/Moscow';
 
-  return async function sendTelegramMessage({ phone, callDateTime, analysis }) {
-    const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
-    const text = formatTelegramCallSummary({
-      phone,
-      callDateTime,
-      analysis,
-      timeZone
-    });
-
+  async function sendTelegramApiRequest({ method, jsonBody = null, formData = null }) {
+    const url = `https://api.telegram.org/bot${botToken}/${method}`;
     const abortController = new AbortController();
     const timeoutId = setTimeout(() => {
       abortController.abort();
     }, timeoutMs);
 
+    const requestOptions = {
+      method: 'POST',
+      signal: abortController.signal
+    };
+
+    if (formData) {
+      requestOptions.body = formData;
+    } else {
+      requestOptions.headers = {
+        'Content-Type': 'application/json'
+      };
+      requestOptions.body = JSON.stringify(jsonBody || {});
+    }
+
     try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        signal: abortController.signal,
-        body: JSON.stringify({
-          chat_id: chatId,
-          text
-        })
-      });
+      const response = await fetch(url, requestOptions);
+      const rawText = await response.text();
 
       let responseJson = null;
-      try {
-        responseJson = await response.json();
-      } catch (parseError) {
-        responseJson = null;
+      if (isNonEmptyString(rawText)) {
+        try {
+          responseJson = JSON.parse(rawText);
+        } catch (error) {
+          responseJson = null;
+        }
       }
 
       if (!response.ok || responseJson?.ok !== true) {
         const description = isNonEmptyString(responseJson?.description)
           ? responseJson.description
-          : 'Telegram returned an unexpected response';
+          : `Telegram returned HTTP ${response.status}`;
 
-        logger.warn('telegram_send_failed', {
+        logger.warn('telegram_api_request_failed', {
+          method,
           httpStatus: response.status,
           description
         });
@@ -82,7 +124,7 @@ function createTelegramSender(config, logger) {
           httpStatus: response.status,
           errorCode: 'TELEGRAM_API_ERROR',
           errorMessage: description,
-          responsePayload: responseJson
+          responsePayload: responseJson || (isNonEmptyString(rawText) ? { raw: rawText } : null)
         };
       }
 
@@ -93,19 +135,21 @@ function createTelegramSender(config, logger) {
       };
     } catch (error) {
       if (error && error.name === 'AbortError') {
-        logger.warn('telegram_send_timeout', {
+        logger.warn('telegram_api_timeout', {
+          method,
           timeoutMs
         });
 
         return {
           status: 'failed',
           errorCode: 'TELEGRAM_TIMEOUT',
-          errorMessage: `Telegram send timeout after ${timeoutMs} ms`,
+          errorMessage: `Telegram request timeout after ${timeoutMs} ms`,
           responsePayload: null
         };
       }
 
-      logger.warn('telegram_send_error', {
+      logger.warn('telegram_api_request_error', {
+        method,
         error
       });
 
@@ -118,10 +162,120 @@ function createTelegramSender(config, logger) {
     } finally {
       clearTimeout(timeoutId);
     }
-  };
+  }
+
+  async function sendTextMessage({ chatId = defaultChatId, text, replyMarkup = null }) {
+    const resolvedChatId = normalizeChatId(chatId);
+    if (!resolvedChatId || !isNonEmptyString(text)) {
+      return {
+        status: 'failed',
+        errorCode: 'TELEGRAM_INVALID_MESSAGE',
+        errorMessage: 'chatId and text are required for Telegram text message',
+        responsePayload: null
+      };
+    }
+
+    const body = {
+      chat_id: resolvedChatId,
+      text: text.trim()
+    };
+
+    if (replyMarkup && typeof replyMarkup === 'object') {
+      body.reply_markup = replyMarkup;
+    }
+
+    return sendTelegramApiRequest({
+      method: 'sendMessage',
+      jsonBody: body
+    });
+  }
+
+  async function sendTextDocument({ chatId, fileName, text }) {
+    const resolvedChatId = normalizeChatId(chatId);
+    if (!resolvedChatId || !isNonEmptyString(fileName) || !isNonEmptyString(text)) {
+      return {
+        status: 'failed',
+        errorCode: 'TELEGRAM_INVALID_DOCUMENT',
+        errorMessage: 'chatId, fileName and text are required for Telegram document send',
+        responsePayload: null
+      };
+    }
+
+    const formData = new FormData();
+    formData.append('chat_id', resolvedChatId);
+    formData.append(
+      'document',
+      new Blob([text], { type: 'text/plain; charset=utf-8' }),
+      fileName.trim()
+    );
+
+    return sendTelegramApiRequest({
+      method: 'sendDocument',
+      formData
+    });
+  }
+
+  async function answerCallbackQuery({ callbackQueryId, text = '', showAlert = false }) {
+    if (!isNonEmptyString(callbackQueryId)) {
+      return {
+        status: 'failed',
+        errorCode: 'TELEGRAM_INVALID_CALLBACK_QUERY_ID',
+        errorMessage: 'callbackQueryId is required',
+        responsePayload: null
+      };
+    }
+
+    return sendTelegramApiRequest({
+      method: 'answerCallbackQuery',
+      jsonBody: {
+        callback_query_id: callbackQueryId.trim(),
+        text: isNonEmptyString(text) ? text.trim() : undefined,
+        show_alert: showAlert === true
+      }
+    });
+  }
+
+  async function sendTelegramMessage({ callEventId, phone, callDateTime, analysis }) {
+    const text = formatTelegramCallSummary({
+      phone,
+      callDateTime,
+      analysis,
+      timeZone
+    });
+
+    const callbackData = buildTranscriptCallbackData(callEventId);
+    const replyMarkup = callbackData
+      ? {
+          inline_keyboard: [
+            [
+              {
+                text: TRANSCRIPT_BUTTON_LABEL,
+                callback_data: callbackData
+              }
+            ]
+          ]
+        }
+      : null;
+
+    return sendTextMessage({
+      chatId: defaultChatId,
+      text,
+      replyMarkup
+    });
+  }
+
+  sendTelegramMessage.sendTextMessage = sendTextMessage;
+  sendTelegramMessage.sendTextDocument = sendTextDocument;
+  sendTelegramMessage.answerCallbackQuery = answerCallbackQuery;
+  sendTelegramMessage.defaultChatId = defaultChatId;
+
+  return sendTelegramMessage;
 }
 
 module.exports = {
   createTelegramSender,
-  TelegramConfigurationError
+  TelegramConfigurationError,
+  buildTranscriptCallbackData,
+  TRANSCRIPT_CALLBACK_PREFIX,
+  TRANSCRIPT_BUTTON_LABEL
 };

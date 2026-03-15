@@ -148,7 +148,8 @@ function loadConfig(options = {}) {
       chatId: validateRuntimeSecrets
         ? getRequiredString('TELEGRAM_CHAT_ID')
         : getOptionalString('TELEGRAM_CHAT_ID', ''),
-      apiTimeoutMs: parsePositiveInt('TELEGRAM_API_TIMEOUT_MS', DEFAULT_TELEGRAM_TIMEOUT_MS)
+      apiTimeoutMs: parsePositiveInt('TELEGRAM_API_TIMEOUT_MS', DEFAULT_TELEGRAM_TIMEOUT_MS),
+      webhookSecret: getOptionalString('TELEGRAM_WEBHOOK_SECRET', '')
     },
     t2: {
       ingestEnabled: parseBoolean('TELE2_INGEST_ENABLED', false),

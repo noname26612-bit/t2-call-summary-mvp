@@ -20,6 +20,52 @@ const DEFAULT_FETCH_LIMIT = 30;
 const DEFAULT_MAX_CANDIDATES = 5;
 const DEFAULT_MIN_AUDIO_BYTES = 4096;
 const DEFAULT_TIMEZONE_OFFSET = '+03:00';
+const MIN_CONVERSATION_DURATION_SECONDS = 5;
+const CONVERSATION_DURATION_FIELDS = [
+  'callDurationSec',
+  'callDurationSeconds',
+  'callDuration',
+  'conversationDurationSec',
+  'conversationDurationSeconds',
+  'conversationDuration',
+  'talkDurationSec',
+  'talkDurationSeconds',
+  'talkDuration',
+  'conversationTime',
+  'durationSec',
+  'durationSeconds',
+  'duration',
+  'billsec',
+  'billSec',
+  'speakingDuration',
+  'speechDuration'
+];
+const MISSED_BOOLEAN_FIELDS = [
+  'isMissed',
+  'missed',
+  'missedCall',
+  'is_missed'
+];
+const MISSED_STATUS_FIELDS = [
+  'callStatus',
+  'status',
+  'result',
+  'disposition',
+  'callResult',
+  'hangupReason',
+  'terminationReason'
+];
+const MISSED_STATUS_TOKENS = [
+  'missed',
+  'no_answer',
+  'not_answered',
+  'unanswered',
+  'noanswer',
+  'busy',
+  'abandoned',
+  'cancelled',
+  'canceled'
+];
 
 function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim() !== '';
@@ -391,6 +437,160 @@ function resolvePhoneFromRecord(record) {
     record.calleeNumber,
     record.phone
   ]);
+}
+
+function parseDurationSeconds(value) {
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+    return value;
+  }
+
+  if (!isNonEmptyString(value)) {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase().replace(',', '.');
+  if (/^[0-9]+(?:\.[0-9]+)?$/.test(normalized)) {
+    return Number.parseFloat(normalized);
+  }
+
+  if (/^[0-9]{1,2}:[0-9]{2}:[0-9]{2}$/.test(normalized)) {
+    const [hoursRaw, minutesRaw, secondsRaw] = normalized.split(':');
+    const hours = Number.parseInt(hoursRaw, 10);
+    const minutes = Number.parseInt(minutesRaw, 10);
+    const seconds = Number.parseInt(secondsRaw, 10);
+    return (hours * 3600) + (minutes * 60) + seconds;
+  }
+
+  if (/^[0-9]{1,2}:[0-9]{2}$/.test(normalized)) {
+    const [minutesRaw, secondsRaw] = normalized.split(':');
+    const minutes = Number.parseInt(minutesRaw, 10);
+    const seconds = Number.parseInt(secondsRaw, 10);
+    return (minutes * 60) + seconds;
+  }
+
+  const textNumberMatch = normalized.match(/([0-9]+(?:\.[0-9]+)?)/);
+  if (!textNumberMatch) {
+    return null;
+  }
+
+  return Number.parseFloat(textNumberMatch[1]);
+}
+
+function extractConversationDuration(record) {
+  for (const field of CONVERSATION_DURATION_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(record || {}, field)) {
+      continue;
+    }
+
+    const rawValue = record[field];
+    const seconds = parseDurationSeconds(rawValue);
+    if (typeof seconds === 'number' && Number.isFinite(seconds) && seconds >= 0) {
+      return {
+        seconds,
+        sourceField: field,
+        rawValue
+      };
+    }
+  }
+
+  return {
+    seconds: null,
+    sourceField: '',
+    rawValue: null
+  };
+}
+
+function recordLooksMissed(record) {
+  for (const field of MISSED_BOOLEAN_FIELDS) {
+    const value = record ? record[field] : undefined;
+    if (value === true || value === 1) {
+      return {
+        isMissed: true,
+        sourceField: field,
+        sourceValue: value
+      };
+    }
+
+    if (isNonEmptyString(value)) {
+      const normalized = value.trim().toLowerCase();
+      if (['1', 'true', 'yes'].includes(normalized)) {
+        return {
+          isMissed: true,
+          sourceField: field,
+          sourceValue: value
+        };
+      }
+    }
+  }
+
+  for (const field of MISSED_STATUS_FIELDS) {
+    const value = record ? record[field] : undefined;
+    if (!isNonEmptyString(value)) {
+      continue;
+    }
+
+    const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+    if (MISSED_STATUS_TOKENS.some((token) => normalized.includes(token))) {
+      return {
+        isMissed: true,
+        sourceField: field,
+        sourceValue: value
+      };
+    }
+  }
+
+  return {
+    isMissed: false,
+    sourceField: '',
+    sourceValue: null
+  };
+}
+
+function evaluateConversationGate(record) {
+  const durationMeta = extractConversationDuration(record);
+  const missedMeta = recordLooksMissed(record);
+
+  if (missedMeta.isMissed) {
+    return {
+      shouldAnalyze: false,
+      reason: 'missed_call',
+      errorCode: 'MISSED_CALL',
+      errorMessage: `Call marked as missed by field "${missedMeta.sourceField}"`,
+      durationSeconds: durationMeta.seconds,
+      durationSourceField: durationMeta.sourceField
+    };
+  }
+
+  if (typeof durationMeta.seconds !== 'number' || Number.isNaN(durationMeta.seconds)) {
+    return {
+      shouldAnalyze: false,
+      reason: 'missing_conversation_duration',
+      errorCode: 'CONVERSATION_DURATION_MISSING',
+      errorMessage: `Cannot resolve conversation duration from Tele2 record (expected one of: ${CONVERSATION_DURATION_FIELDS.join(', ')})`,
+      durationSeconds: null,
+      durationSourceField: durationMeta.sourceField
+    };
+  }
+
+  if (durationMeta.seconds <= MIN_CONVERSATION_DURATION_SECONDS) {
+    return {
+      shouldAnalyze: false,
+      reason: 'short_conversation',
+      errorCode: 'CONVERSATION_DURATION_TOO_SHORT',
+      errorMessage: `Conversation duration ${durationMeta.seconds} sec is not greater than ${MIN_CONVERSATION_DURATION_SECONDS} sec`,
+      durationSeconds: durationMeta.seconds,
+      durationSourceField: durationMeta.sourceField
+    };
+  }
+
+  return {
+    shouldAnalyze: true,
+    reason: 'eligible',
+    errorCode: '',
+    errorMessage: '',
+    durationSeconds: durationMeta.seconds,
+    durationSourceField: durationMeta.sourceField
+  };
 }
 
 function phoneLast4(phone) {
@@ -980,6 +1180,40 @@ async function processCandidate({
     return;
   }
 
+  const conversationGate = evaluateConversationGate(record);
+  if (!conversationGate.shouldAnalyze) {
+    stats.skipped += 1;
+
+    if (conversationGate.reason === 'missed_call') {
+      stats.skippedMissed += 1;
+    } else if (conversationGate.reason === 'short_conversation') {
+      stats.skippedShortConversation += 1;
+    } else if (conversationGate.reason === 'missing_conversation_duration') {
+      stats.skippedMissingDuration += 1;
+    }
+
+    logger.info('tele2_poll_candidate_skipped', {
+      recordFileName,
+      reason: conversationGate.reason,
+      durationSeconds: conversationGate.durationSeconds,
+      durationSourceField: conversationGate.durationSourceField,
+      thresholdSeconds: MIN_CONVERSATION_DURATION_SECONDS
+    });
+
+    if (dedupReserved) {
+      await finalizeDedupRecord(pool, {
+        recordFileName,
+        status: 'skipped',
+        phoneRaw: phone,
+        callDateTimeRaw: callDateTime,
+        errorCode: conversationGate.errorCode,
+        errorMessage: conversationGate.errorMessage
+      });
+    }
+
+    return;
+  }
+
   let audio = null;
 
   try {
@@ -1302,6 +1536,8 @@ Options:
   --fetch-limit <int>                Tele2 info page size
   --max-candidates <int>             Max unique records to process from fetched list
   --min-audio-bytes <int>            Skip too-small audio files
+                                     Calls are analyzed only when conversation duration > 5 seconds
+                                     and call is not marked as missed (based on Tele2 metadata).
   --timeout-ms <int>                 HTTP timeout in ms
   --retry-failed / --no-retry-failed Retry records with failed dedup status
   --timezone-offset <+HH:MM|-HH:MM>  Offset for Tele2 info window
@@ -1357,6 +1593,9 @@ async function main() {
     processed: 0,
     processDuplicates: 0,
     ignored: 0,
+    skippedMissed: 0,
+    skippedShortConversation: 0,
+    skippedMissingDuration: 0,
     skipped: 0,
     failed: 0
   };
@@ -1367,6 +1606,7 @@ async function main() {
     fetchLimit: config.fetchLimit,
     maxCandidates: config.maxCandidates,
     minAudioBytes: config.minAudioBytes,
+    minConversationDurationSecondsExclusive: MIN_CONVERSATION_DURATION_SECONDS,
     retryFailed: config.retryFailed,
     transcribeModel: isNonEmptyString(config.transcribeModel) ? config.transcribeModel : '',
     compareTranscribeModel: isNonEmptyString(config.compareTranscribeModel) ? config.compareTranscribeModel : '',
