@@ -263,7 +263,7 @@ curl -s -X POST http://localhost:3000/api/process-call \
 curl -s -X POST http://localhost:3000/api/process-call \
   -H "Content-Type: application/json" \
   -d '{
-    "phone": "+79990000001",
+    "phone": "+79161245991",
     "callDateTime": "2026-03-13T15:35:00+03:00",
     "transcript": "Тестовый внутренний звонок"
   }'
