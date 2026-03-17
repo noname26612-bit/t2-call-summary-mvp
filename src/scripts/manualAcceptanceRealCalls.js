@@ -93,9 +93,13 @@ function buildAnalyzerConfig(gatewayEnv) {
 }
 
 function loadOldFormatterFromHead() {
+  return loadFormatterFromGitRef('HEAD');
+}
+
+function loadFormatterFromGitRef(gitRef) {
   const formatterPath = path.resolve(__dirname, '../services/telegramMessageFormatter.js');
   const headCode = require('child_process')
-    .execSync('git show HEAD:src/services/telegramMessageFormatter.js', {
+    .execSync(`git show ${gitRef}:src/services/telegramMessageFormatter.js`, {
       cwd: ROOT,
       encoding: 'utf8'
     });
@@ -112,6 +116,39 @@ function loadOldFormatterFromHead() {
   }
 
   return module.exports.formatTelegramCallSummary;
+}
+
+function parseArgs(argv) {
+  const args = [...argv];
+  const parsed = {
+    baselineRef: process.env.ACCEPTANCE_BASELINE_REF || 'origin/main'
+  };
+
+  while (args.length > 0) {
+    const token = args.shift();
+
+    if (token.startsWith('--baseline-ref=')) {
+      parsed.baselineRef = token.split('=').slice(1).join('=').trim() || parsed.baselineRef;
+      continue;
+    }
+
+    if (token === '--baseline-ref') {
+      const nextToken = args.shift();
+      if (isNonEmptyString(nextToken)) {
+        parsed.baselineRef = nextToken.trim();
+      }
+      continue;
+    }
+
+    if (token === '--help' || token === '-h') {
+      process.stdout.write(
+        'Usage: node src/scripts/manualAcceptanceRealCalls.js [--baseline-ref origin/main]\n'
+      );
+      process.exit(0);
+    }
+  }
+
+  return parsed;
 }
 
 function scoreSummaryPair({ oldMessage, newMessage, analysis }) {
@@ -155,6 +192,7 @@ function scoreSummaryPair({ oldMessage, newMessage, analysis }) {
 }
 
 async function run() {
+  const args = parseArgs(process.argv.slice(2));
   const dbEnvPath = path.join(ROOT, '.env.save');
   const gatewayEnvPath = path.join(ROOT, 'ai-gateway/.env');
   const dbEnv = loadEnvFile(dbEnvPath);
@@ -170,7 +208,7 @@ async function run() {
 
   const pool = createPgPool(buildDbConfigFromEnv(dbEnv));
   const analyzeCall = createOpenAIAnalyzer(buildAnalyzerConfig(gatewayEnv), createNoopLogger());
-  const formatTelegramCallSummaryOld = loadOldFormatterFromHead();
+  const formatTelegramCallSummaryOld = loadFormatterFromGitRef(args.baselineRef);
 
   const rowsResult = await pool.query(
     `
@@ -276,6 +314,7 @@ async function run() {
   lines.push('# Manual Acceptance (Old vs New Telegram Summary)');
   lines.push('');
   lines.push(`Generated at: ${new Date().toISOString()}`);
+  lines.push(`Baseline ref: ${args.baselineRef}`);
   lines.push(`Cases analyzed: ${cases.length}`);
   lines.push(`Cases failed: ${failedCases.length}`);
   lines.push(`Verdict counters: improved=${improved}, same=${same}, risk=${risk}`);
