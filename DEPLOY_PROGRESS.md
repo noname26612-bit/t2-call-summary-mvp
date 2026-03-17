@@ -44,6 +44,8 @@ Baseline status:
 - production baseline is closed and considered stable
 - topology and production routing are fixed
 - `Telegram message format v2.1` rollout is completed and live-verified
+- narrow Telegram format update implemented (`Тип звонка` + `Абонент`, plain text only, one call = one message) on `2026-03-17`
+- poller live path now forwards `callType/callerNumber/calleeNumber/destinationNumber` into `/api/process-call` payload (`2026-03-17`)
 - production incident on `2026-03-14` is manually mitigated
 - post-incident hardening for Tele2 poller auth/env is deployed as separate narrow pass
 

@@ -12,6 +12,8 @@ Current status:
 - [x] Production baseline is closed and stabilized
 - [x] Improvement wave #1 is activated
 - [x] `Telegram message format v2.1` rollout is completed and live-verified
+- [x] Narrow Telegram format pass completed (`Тип звонка` + `Абонент`, plain text, one call = one message, `2026-03-17`)
+- [x] Poller runtime payload pass completed (`callType/callerNumber/calleeNumber/destinationNumber` -> `/api/process-call` -> Telegram, `2026-03-17`)
 - [x] Post-incident hardening rollout is completed as separate narrow pass
 - [x] Transcript storage + `.txt` transcript button pass is completed locally
 - [x] Telegram callback polling via `getUpdates` pass is completed

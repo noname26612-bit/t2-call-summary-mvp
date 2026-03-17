@@ -10,6 +10,7 @@
     "import:json": "node src/scripts/importJsonBootstrap.js",
     "smoke:telegram-v2": "node src/scripts/smokeTelegramFormatV2.js",
     "smoke:transcript-button": "node src/scripts/smokeTranscriptButtonFlow.js",
+    "smoke:tele2-poll-runtime-path": "node src/scripts/smokeTele2PollRuntimePath.js",
     "smoke:telegram-callback-polling": "node src/scripts/smokeTelegramCallbackPolling.js",
     "manual:tele2-record": "node src/scripts/processTele2RecordManual.js",
     "tele2:poll-once": "node src/scripts/pollTele2RecordsOnce.js"

@@ -4,7 +4,11 @@ const { formatTelegramCallSummary } = require('../services/telegramMessageFormat
 const BASE_CALL = {
   phone: '+79991234567',
   callDateTime: '2026-03-14T12:13:00+03:00',
-  timeZone: 'Europe/Moscow'
+  timeZone: 'Europe/Moscow',
+  callType: 'INCOMING',
+  callerNumber: '+79991234567',
+  destinationNumber: '+74951234567',
+  calleeNumber: '+74951234567'
 };
 
 const BASE_ANALYSIS = {
@@ -184,13 +188,58 @@ const CASES = [
       hasCompanyLine: false,
       hasOrderLine: false
     }
+  },
+  {
+    title: 'Outgoing call type + subscriber line from callerNumber',
+    transcript: 'Перезвонили клиенту по уточнению доставки.',
+    payload: {
+      category: 'сервис',
+      primaryScenario: 'Доставка',
+      wantedSummary: 'Сотрудник позвонил клиенту для уточнения времени доставки.'
+    },
+    callContext: {
+      callType: 'OUTGOING',
+      callerNumber: '8 (495) 765-43-21',
+      destinationNumber: '+7 999 111-22-33',
+      calleeNumber: '+7 999 111-22-33'
+    },
+    expected: {
+      category: 'Доставка',
+      hasCompanyLine: false,
+      hasOrderLine: false,
+      callType: 'Исходящий',
+      subscriber: '+74957654321'
+    }
+  },
+  {
+    title: 'Unknown call type keeps placeholders',
+    transcript: 'Клиент задал вопрос по общим условиям.',
+    payload: {
+      category: 'прочее',
+      wantedSummary: 'Уточнение общих условий сотрудничества.'
+    },
+    callContext: {
+      callType: 'SIDEWAY',
+      callerNumber: '+7 495 000-00-01',
+      destinationNumber: '+7 495 000-00-02',
+      calleeNumber: '+7 495 000-00-03'
+    },
+    expected: {
+      category: 'Другое',
+      hasCompanyLine: false,
+      hasOrderLine: false,
+      callType: '—',
+      subscriber: '—'
+    }
   }
 ];
 
 function validateMessage({ title, message, normalized, expected }) {
   const errors = [];
+  const expectedCallType = expected.callType || 'Входящий';
+  const expectedSubscriber = expected.subscriber || '+74951234567';
 
-  for (const prefix of ['Кто звонил:', 'Когда звонил:', 'Что хотели:', 'Категория:']) {
+  for (const prefix of ['Тип звонка:', 'Абонент:', 'Кто звонил:', 'Когда звонил:', 'Что хотели:', 'Категория:']) {
     if (!message.includes(prefix)) {
       errors.push(`${title}: missing required field "${prefix}"`);
     }
@@ -204,6 +253,18 @@ function validateMessage({ title, message, normalized, expected }) {
 
   if (!message.includes(`Категория: ${expected.category}`)) {
     errors.push(`${title}: expected category "${expected.category}"`);
+  }
+
+  if (!message.includes(`Тип звонка: ${expectedCallType}`)) {
+    errors.push(`${title}: expected call type "${expectedCallType}"`);
+  }
+
+  if (!message.includes(`Абонент: ${expectedSubscriber}`)) {
+    errors.push(`${title}: expected subscriber "${expectedSubscriber}"`);
+  }
+
+  if (!/Абонент:[^\n]*\n\nКто звонил:/m.test(message)) {
+    errors.push(`${title}: expected empty line between "Абонент" and "Кто звонил"`);
   }
 
   if (!/Когда звонил:[^\n]*\n\nЧто хотели:/m.test(message)) {
@@ -289,6 +350,7 @@ for (const sample of CASES) {
 
   const message = formatTelegramCallSummary({
     ...BASE_CALL,
+    ...(sample.callContext || {}),
     analysis: normalized
   });
 

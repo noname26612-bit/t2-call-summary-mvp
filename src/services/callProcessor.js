@@ -44,6 +44,23 @@ function buildTranscriptPreview(transcript) {
   return transcript.trim().slice(0, 240);
 }
 
+function normalizeOptionalPhone(value) {
+  if (!isNonEmptyString(value)) {
+    return '';
+  }
+
+  return normalizePhone(value.trim());
+}
+
+function resolveOptionalCallMeta(payload = {}) {
+  return {
+    callType: isNonEmptyString(payload.callType) ? payload.callType.trim() : '',
+    callerNumber: normalizeOptionalPhone(payload.callerNumber),
+    calleeNumber: normalizeOptionalPhone(payload.calleeNumber),
+    destinationNumber: normalizeOptionalPhone(payload.destinationNumber)
+  };
+}
+
 function sanitizeErrorForAudit(error) {
   if (!(error instanceof Error)) {
     return {
@@ -77,6 +94,7 @@ function createCallProcessor({ storage, analyzeCall, sendTelegramMessage, logger
     const phone = normalizePhone(phoneRaw);
     const callDateTime = payload.callDateTime.trim();
     const transcript = payload.transcript.trim();
+    const callMeta = resolveOptionalCallMeta(payload);
     const requestId = isNonEmptyString(options.requestId) ? options.requestId.trim() : '';
     const source = getHistorySource(options.source);
     const transcriptHash = buildTranscriptHash(transcript);
@@ -194,7 +212,8 @@ function createCallProcessor({ storage, analyzeCall, sendTelegramMessage, logger
         callEventId,
         phone,
         callDateTime,
-        analysis
+        analysis,
+        ...callMeta
       });
 
       await storage.saveTelegramDelivery({

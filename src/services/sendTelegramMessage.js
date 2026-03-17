@@ -299,11 +299,24 @@ function createTelegramSender(config, logger) {
     });
   }
 
-  async function sendTelegramMessage({ callEventId, phone, callDateTime, analysis }) {
+  async function sendTelegramMessage({
+    callEventId,
+    phone,
+    callDateTime,
+    analysis,
+    callType,
+    callerNumber,
+    calleeNumber,
+    destinationNumber
+  }) {
     const text = formatTelegramCallSummary({
       phone,
       callDateTime,
       analysis,
+      callType,
+      callerNumber,
+      calleeNumber,
+      destinationNumber,
       timeZone
     });
 

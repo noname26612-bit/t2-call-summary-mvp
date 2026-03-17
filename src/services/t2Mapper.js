@@ -103,12 +103,26 @@ function normalizeIncomingCallPayload(raw, adapterConfig = {}) {
       : '',
     transcript: isNonEmptyString(adapterConfig.transcriptFieldPath)
       ? adapterConfig.transcriptFieldPath.trim()
+      : '',
+    callType: isNonEmptyString(adapterConfig.callTypeFieldPath) ? adapterConfig.callTypeFieldPath.trim() : '',
+    callerNumber: isNonEmptyString(adapterConfig.callerNumberFieldPath)
+      ? adapterConfig.callerNumberFieldPath.trim()
+      : '',
+    calleeNumber: isNonEmptyString(adapterConfig.calleeNumberFieldPath)
+      ? adapterConfig.calleeNumberFieldPath.trim()
+      : '',
+    destinationNumber: isNonEmptyString(adapterConfig.destinationNumberFieldPath)
+      ? adapterConfig.destinationNumberFieldPath.trim()
       : ''
   };
 
   const phoneField = extractStringField(raw, 'phone', configuredPaths.phone);
   const callDateTimeField = extractStringField(raw, 'callDateTime', configuredPaths.callDateTime);
   const transcriptField = extractStringField(raw, 'transcript', configuredPaths.transcript);
+  const callTypeField = extractStringField(raw, 'callType', configuredPaths.callType);
+  const callerNumberField = extractStringField(raw, 'callerNumber', configuredPaths.callerNumber);
+  const calleeNumberField = extractStringField(raw, 'calleeNumber', configuredPaths.calleeNumber);
+  const destinationNumberField = extractStringField(raw, 'destinationNumber', configuredPaths.destinationNumber);
   const errors = [];
 
   if (!isNonEmptyString(phoneField.value)) {
@@ -140,7 +154,11 @@ function normalizeIncomingCallPayload(raw, adapterConfig = {}) {
     resolvedPaths: {
       phone: phoneField.resolvedPath || '',
       callDateTime: callDateTimeField.resolvedPath || '',
-      transcript: transcriptField.resolvedPath || ''
+      transcript: transcriptField.resolvedPath || '',
+      callType: callTypeField.resolvedPath || '',
+      callerNumber: callerNumberField.resolvedPath || '',
+      calleeNumber: calleeNumberField.resolvedPath || '',
+      destinationNumber: destinationNumberField.resolvedPath || ''
     },
     topLevelKeys: Object.keys(raw).sort()
   };
@@ -158,7 +176,11 @@ function normalizeIncomingCallPayload(raw, adapterConfig = {}) {
     payload: {
       phone: phoneField.value,
       callDateTime: callDateTimeField.value,
-      transcript: transcriptField.value
+      transcript: transcriptField.value,
+      ...(isNonEmptyString(callTypeField.value) ? { callType: callTypeField.value } : {}),
+      ...(isNonEmptyString(callerNumberField.value) ? { callerNumber: callerNumberField.value } : {}),
+      ...(isNonEmptyString(calleeNumberField.value) ? { calleeNumber: calleeNumberField.value } : {}),
+      ...(isNonEmptyString(destinationNumberField.value) ? { destinationNumber: destinationNumberField.value } : {})
     },
     adapterMeta
   };

@@ -439,6 +439,34 @@ function resolvePhoneFromRecord(record) {
   ]);
 }
 
+function buildProcessCallPayload({
+  record = {},
+  phone = '',
+  callDateTime = '',
+  transcript = ''
+} = {}) {
+  const payload = {
+    phone: isNonEmptyString(phone) ? phone.trim() : '',
+    callDateTime: isNonEmptyString(callDateTime) ? callDateTime.trim() : '',
+    transcript: isNonEmptyString(transcript) ? transcript.trim() : ''
+  };
+
+  const optionalFields = {
+    callType: pickFirstNonEmptyString([record?.callType]),
+    callerNumber: pickFirstNonEmptyString([record?.callerNumber]),
+    calleeNumber: pickFirstNonEmptyString([record?.calleeNumber]),
+    destinationNumber: pickFirstNonEmptyString([record?.destinationNumber])
+  };
+
+  for (const [key, value] of Object.entries(optionalFields)) {
+    if (isNonEmptyString(value)) {
+      payload[key] = value;
+    }
+  }
+
+  return payload;
+}
+
 function parseDurationSeconds(value) {
   if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
     return value;
@@ -892,9 +920,7 @@ async function runTranscriptionAttempt({
 async function sendProcessCall({
   processUrl,
   ingestSecret,
-  phone,
-  callDateTime,
-  transcript,
+  payload,
   timeoutMs
 }) {
   const headers = {
@@ -908,32 +934,28 @@ async function sendProcessCall({
   const response = await fetchWithTimeout(processUrl, {
     method: 'POST',
     headers,
-    body: JSON.stringify({
-      phone,
-      callDateTime,
-      transcript
-    })
+    body: JSON.stringify(payload)
   }, timeoutMs);
 
   const raw = await response.text();
-  let payload = null;
+  let parsedBody = null;
   try {
-    payload = JSON.parse(raw);
+    parsedBody = JSON.parse(raw);
   } catch (error) {
-    payload = null;
+    parsedBody = null;
   }
 
   if (!response.ok) {
     const requestError = new Error(`process-call failed with status ${response.status}`);
     requestError.statusCode = response.status;
-    requestError.code = payload?.code || 'PROCESS_CALL_HTTP_ERROR';
-    requestError.responseBody = payload || raw;
+    requestError.code = parsedBody?.code || 'PROCESS_CALL_HTTP_ERROR';
+    requestError.responseBody = parsedBody || raw;
     throw requestError;
   }
 
   return {
     statusCode: response.status,
-    body: payload || raw
+    body: parsedBody || raw
   };
 }
 
@@ -1338,12 +1360,17 @@ async function processCandidate({
       return;
     }
 
+    const processCallPayload = buildProcessCallPayload({
+      record,
+      phone,
+      callDateTime,
+      transcript: transcription.transcript
+    });
+
     const processCallResult = await sendProcessCall({
       processUrl: config.processUrl,
       ingestSecret: config.ingestSecret,
-      phone,
-      callDateTime,
-      transcript: transcription.transcript,
+      payload: processCallPayload,
       timeoutMs: config.timeoutMs
     });
 
@@ -1694,14 +1721,22 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  process.stderr.write(`${JSON.stringify({
-    ok: false,
-    error: error?.message || 'Unknown error',
-    code: isNonEmptyString(error?.code) ? error.code : '',
-    statusCode: Number.isInteger(error?.statusCode) ? error.statusCode : null,
-    responseBody: error?.responseBody || null,
-    stack: isNonEmptyString(error?.stack) ? error.stack : ''
-  }, null, 2)}\n`);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    process.stderr.write(`${JSON.stringify({
+      ok: false,
+      error: error?.message || 'Unknown error',
+      code: isNonEmptyString(error?.code) ? error.code : '',
+      statusCode: Number.isInteger(error?.statusCode) ? error.statusCode : null,
+      responseBody: error?.responseBody || null,
+      stack: isNonEmptyString(error?.stack) ? error.stack : ''
+    }, null, 2)}\n`);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  resolvePhoneFromRecord,
+  buildProcessCallPayload,
+  sendProcessCall
+};

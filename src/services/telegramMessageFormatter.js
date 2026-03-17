@@ -1,4 +1,5 @@
 const { parseDateOrNull } = require('../utils/dateTime');
+const { normalizePhone } = require('../utils/ignoredPhones');
 
 const EMPTY_VALUE = '—';
 
@@ -97,6 +98,69 @@ function normalizeOptionalText(value) {
   }
 
   return normalized;
+}
+
+function pickFirstNonEmptyString(values) {
+  for (const value of values) {
+    const normalized = normalizeSingleLine(value);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return '';
+}
+
+function normalizeCallType(value) {
+  const normalized = normalizeSingleLine(value).toUpperCase();
+  if (normalized === 'INCOMING' || normalized === 'INBOUND') {
+    return 'INCOMING';
+  }
+
+  if (normalized === 'OUTGOING' || normalized === 'OUTBOUND') {
+    return 'OUTGOING';
+  }
+
+  return '';
+}
+
+function resolveCallTypeLabel(callType) {
+  const normalizedCallType = normalizeCallType(callType);
+  if (normalizedCallType === 'INCOMING') {
+    return 'Входящий';
+  }
+
+  if (normalizedCallType === 'OUTGOING') {
+    return 'Исходящий';
+  }
+
+  return EMPTY_VALUE;
+}
+
+function normalizePhoneText(value) {
+  const normalized = pickFirstNonEmptyString([value]);
+  if (!normalized) {
+    return '';
+  }
+
+  return normalizeSingleLine(normalizePhone(normalized));
+}
+
+function resolveSubscriberPhone({ callType, callerNumber, calleeNumber, destinationNumber }) {
+  const normalizedCallType = normalizeCallType(callType);
+
+  let sourcePhone = '';
+  if (normalizedCallType === 'OUTGOING') {
+    sourcePhone = pickFirstNonEmptyString([callerNumber]);
+  } else if (normalizedCallType === 'INCOMING') {
+    sourcePhone = pickFirstNonEmptyString([destinationNumber, calleeNumber]);
+  }
+
+  if (!sourcePhone) {
+    return '';
+  }
+
+  return normalizePhone(sourcePhone);
 }
 
 function normalizeScenarioToken(value) {
@@ -358,16 +422,35 @@ function buildWantedText(analysis, { companyName, orderNumber }) {
   return appendOptionalDetailsToWantedText(wantedText, { companyName, orderNumber });
 }
 
-function formatTelegramCallSummary({ phone, callDateTime, analysis, timeZone = 'Europe/Moscow' } = {}) {
+function formatTelegramCallSummary({
+  phone,
+  callDateTime,
+  analysis,
+  timeZone = 'Europe/Moscow',
+  callType,
+  callerNumber,
+  calleeNumber,
+  destinationNumber
+} = {}) {
   const normalizedAnalysis = isPlainObject(analysis) ? analysis : {};
   const primaryScenario = resolvePrimaryScenario(normalizedAnalysis);
-  const phoneText = normalizeSingleLine(phone) || EMPTY_VALUE;
+  const callTypeText = resolveCallTypeLabel(callType);
+  const subscriberText = normalizePhoneText(resolveSubscriberPhone({
+    callType,
+    callerNumber,
+    calleeNumber,
+    destinationNumber
+  })) || EMPTY_VALUE;
+  const phoneText = normalizePhoneText(phone) || EMPTY_VALUE;
   const dateTimeText = formatCallDateTime(callDateTime, timeZone);
   const companyName = normalizeOptionalText(normalizedAnalysis.companyName);
   const orderNumber = normalizeOptionalText(normalizedAnalysis.orderNumber);
   const wantedText = buildWantedText(normalizedAnalysis, { companyName, orderNumber });
 
   const lines = [
+    `Тип звонка: ${callTypeText}`,
+    `Абонент: ${subscriberText}`,
+    '',
     `Кто звонил: ${phoneText}`,
     `Когда звонил: ${dateTimeText}`,
     '',
