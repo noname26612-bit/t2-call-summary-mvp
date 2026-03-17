@@ -16,6 +16,18 @@ const TEXT_LIMITS = Object.freeze({
   summary: 220,
   result: 160,
   nextStep: 160,
+  transcriptPlain: 20000,
+  participantsAssumption: 120,
+  detectedClientSpeaker: 80,
+  detectedEmployeeSpeaker: 80,
+  clientGoal: 220,
+  employeeResponse: 220,
+  issueReason: 220,
+  outcome: 220,
+  nextStepStructured: 220,
+  analysisWarningItem: 180,
+  reconstructedTurnSpeaker: 80,
+  reconstructedTurnText: 220,
   wantedSummary: 420,
   partsItem: 80,
   rentalStart: 80,
@@ -43,6 +55,18 @@ const REQUIRED_FIELDS = Object.freeze([
 const OPTIONAL_FIELDS = Object.freeze([
   'primaryScenario',
   'wantedSummary',
+  'transcriptPlain',
+  'reconstructedTurns',
+  'participantsAssumption',
+  'detectedClientSpeaker',
+  'detectedEmployeeSpeaker',
+  'speakerRoleConfidence',
+  'clientGoal',
+  'employeeResponse',
+  'issueReason',
+  'outcome',
+  'nextStepStructured',
+  'analysisWarnings',
   'partsRequested',
   'rentalStart',
   'rentalDuration',
@@ -713,6 +737,85 @@ function normalizeConfidence(rawConfidence) {
   return numericValue;
 }
 
+function normalizeOptionalConfidence(rawConfidence) {
+  if (rawConfidence === null || rawConfidence === undefined || rawConfidence === '') {
+    return null;
+  }
+
+  return normalizeConfidence(rawConfidence);
+}
+
+function normalizeReconstructedTurns(rawTurns) {
+  if (!Array.isArray(rawTurns)) {
+    return [];
+  }
+
+  const normalized = [];
+
+  for (const rawTurn of rawTurns) {
+    if (!isPlainObject(rawTurn)) {
+      continue;
+    }
+
+    const speaker = normalizeOptionalText(rawTurn.speaker, TEXT_LIMITS.reconstructedTurnSpeaker);
+    const text = normalizeOptionalText(rawTurn.text, TEXT_LIMITS.reconstructedTurnText);
+    const roleToken = normalizeEnumToken(rawTurn.role);
+    const role = ['client', 'employee', 'unknown'].includes(roleToken) ? roleToken : 'unknown';
+    const confidence = normalizeOptionalConfidence(rawTurn.confidence);
+
+    if (!speaker || !text) {
+      continue;
+    }
+
+    const turn = {
+      speaker,
+      role,
+      text
+    };
+
+    if (confidence !== null) {
+      turn.confidence = confidence;
+    }
+
+    normalized.push(turn);
+    if (normalized.length >= 20) {
+      break;
+    }
+  }
+
+  return normalized;
+}
+
+function normalizeAnalysisWarnings(rawWarnings) {
+  const warnings = [];
+  const seen = new Set();
+
+  const rawItems = Array.isArray(rawWarnings)
+    ? rawWarnings
+    : (typeof rawWarnings === 'string' ? rawWarnings.split(/[;\n|]+/) : []);
+
+  for (const rawItem of rawItems) {
+    const normalizedWarning = normalizeOptionalText(rawItem, TEXT_LIMITS.analysisWarningItem);
+    if (!normalizedWarning) {
+      continue;
+    }
+
+    const dedupeKey = normalizedWarning.toLowerCase();
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+
+    seen.add(dedupeKey);
+    warnings.push(normalizedWarning);
+
+    if (warnings.length >= 8) {
+      break;
+    }
+  }
+
+  return warnings;
+}
+
 function normalizeTags(rawTags, category) {
   const candidates = [];
 
@@ -932,9 +1035,169 @@ function validateNormalizedAnalysis(analysis) {
     throw new AnalysisNormalizationError('Invalid analysis.repairType value', 'ANALYSIS_INVALID_REPAIR_TYPE');
   }
 
+  if ('transcriptPlain' in analysis) {
+    if (typeof analysis.transcriptPlain !== 'string') {
+      throw new AnalysisNormalizationError(
+        'Invalid analysis.transcriptPlain value',
+        'ANALYSIS_INVALID_TRANSCRIPT_PLAIN'
+      );
+    }
+
+    if (analysis.transcriptPlain.length > TEXT_LIMITS.transcriptPlain) {
+      throw new AnalysisNormalizationError(
+        'Invalid analysis.transcriptPlain length',
+        'ANALYSIS_INVALID_TRANSCRIPT_PLAIN'
+      );
+    }
+  }
+
+  for (const fieldName of [
+    'participantsAssumption',
+    'detectedClientSpeaker',
+    'detectedEmployeeSpeaker',
+    'clientGoal',
+    'employeeResponse',
+    'issueReason',
+    'outcome',
+    'nextStepStructured'
+  ]) {
+    if (!(fieldName in analysis)) {
+      continue;
+    }
+
+    const fieldValue = analysis[fieldName];
+    const maxLength = TEXT_LIMITS[fieldName];
+
+    if (typeof fieldValue !== 'string' || fieldValue.trim() === '') {
+      throw new AnalysisNormalizationError(`Invalid analysis.${fieldName} value`, `ANALYSIS_INVALID_${fieldName.toUpperCase()}`);
+    }
+
+    if (fieldValue.trim().length > maxLength) {
+      throw new AnalysisNormalizationError(
+        `Invalid analysis.${fieldName} length`,
+        `ANALYSIS_INVALID_${fieldName.toUpperCase()}`
+      );
+    }
+  }
+
+  if ('speakerRoleConfidence' in analysis) {
+    if (
+      typeof analysis.speakerRoleConfidence !== 'number' ||
+      !Number.isFinite(analysis.speakerRoleConfidence) ||
+      analysis.speakerRoleConfidence < 0 ||
+      analysis.speakerRoleConfidence > 1
+    ) {
+      throw new AnalysisNormalizationError(
+        'Invalid analysis.speakerRoleConfidence value',
+        'ANALYSIS_INVALID_SPEAKER_ROLE_CONFIDENCE'
+      );
+    }
+  }
+
+  if ('reconstructedTurns' in analysis) {
+    if (!Array.isArray(analysis.reconstructedTurns) || analysis.reconstructedTurns.length > 20) {
+      throw new AnalysisNormalizationError(
+        'Invalid analysis.reconstructedTurns value',
+        'ANALYSIS_INVALID_RECONSTRUCTED_TURNS'
+      );
+    }
+
+    for (const turn of analysis.reconstructedTurns) {
+      if (!isPlainObject(turn)) {
+        throw new AnalysisNormalizationError(
+          'Invalid analysis.reconstructedTurns item',
+          'ANALYSIS_INVALID_RECONSTRUCTED_TURNS'
+        );
+      }
+
+      if (
+        !['client', 'employee', 'unknown'].includes(turn.role) ||
+        typeof turn.speaker !== 'string' ||
+        typeof turn.text !== 'string' ||
+        turn.speaker.trim() === '' ||
+        turn.text.trim() === ''
+      ) {
+        throw new AnalysisNormalizationError(
+          'Invalid analysis.reconstructedTurns item',
+          'ANALYSIS_INVALID_RECONSTRUCTED_TURNS'
+        );
+      }
+
+      if (
+        turn.speaker.length > TEXT_LIMITS.reconstructedTurnSpeaker ||
+        turn.text.length > TEXT_LIMITS.reconstructedTurnText
+      ) {
+        throw new AnalysisNormalizationError(
+          'Invalid analysis.reconstructedTurns item length',
+          'ANALYSIS_INVALID_RECONSTRUCTED_TURNS'
+        );
+      }
+
+      if ('confidence' in turn) {
+        if (
+          typeof turn.confidence !== 'number' ||
+          !Number.isFinite(turn.confidence) ||
+          turn.confidence < 0 ||
+          turn.confidence > 1
+        ) {
+          throw new AnalysisNormalizationError(
+            'Invalid analysis.reconstructedTurns confidence',
+            'ANALYSIS_INVALID_RECONSTRUCTED_TURNS'
+          );
+        }
+      }
+    }
+  }
+
+  if ('analysisWarnings' in analysis) {
+    if (!Array.isArray(analysis.analysisWarnings) || analysis.analysisWarnings.length > 8) {
+      throw new AnalysisNormalizationError(
+        'Invalid analysis.analysisWarnings value',
+        'ANALYSIS_INVALID_ANALYSIS_WARNINGS'
+      );
+    }
+
+    const warningSet = new Set();
+    for (const warning of analysis.analysisWarnings) {
+      if (typeof warning !== 'string' || warning.trim() === '') {
+        throw new AnalysisNormalizationError(
+          'Invalid analysis.analysisWarnings item',
+          'ANALYSIS_INVALID_ANALYSIS_WARNINGS'
+        );
+      }
+
+      if (warning.length > TEXT_LIMITS.analysisWarningItem) {
+        throw new AnalysisNormalizationError(
+          'Invalid analysis.analysisWarnings item length',
+          'ANALYSIS_INVALID_ANALYSIS_WARNINGS'
+        );
+      }
+
+      const warningKey = warning.toLowerCase();
+      if (warningSet.has(warningKey)) {
+        throw new AnalysisNormalizationError(
+          'Invalid analysis.analysisWarnings duplicates',
+          'ANALYSIS_INVALID_ANALYSIS_WARNINGS'
+        );
+      }
+
+      warningSet.add(warningKey);
+    }
+  }
+
   if (typeof analysis.confidence !== 'number' || !Number.isFinite(analysis.confidence) || analysis.confidence < 0 || analysis.confidence > 1) {
     throw new AnalysisNormalizationError('Invalid analysis.confidence value', 'ANALYSIS_INVALID_CONFIDENCE');
   }
+}
+
+function pickFirstDefined(payload, keys = []) {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(payload, key)) {
+      return payload[key];
+    }
+  }
+
+  return undefined;
 }
 
 function normalizeAndValidateAnalysis(payload, options = {}) {
@@ -1002,6 +1265,57 @@ function normalizeAndValidateAnalysis(payload, options = {}) {
   const deliveryDetails = normalizeOptionalText(payload.deliveryDetails, TEXT_LIMITS.deliveryDetails);
   const companyName = normalizeOptionalText(payload.companyName, TEXT_LIMITS.companyName);
   const orderNumber = normalizeOptionalText(payload.orderNumber, TEXT_LIMITS.orderNumber);
+  const transcriptPlain = clampMultilineText(
+    stringFromUnknown(
+      pickFirstDefined(payload, ['transcriptPlain', 'transcript_plain']) || transcript
+    ),
+    TEXT_LIMITS.transcriptPlain
+  );
+  const reconstructedTurns = normalizeReconstructedTurns(
+    pickFirstDefined(payload, ['reconstructedTurns', 'reconstructed_turns'])
+  );
+  const participantsAssumption = normalizeOptionalText(
+    pickFirstDefined(payload, ['participantsAssumption', 'participants_assumption']),
+    TEXT_LIMITS.participantsAssumption
+  ) || 'Предположение: два участника разговора (клиент и сотрудник).';
+  const detectedClientSpeaker = normalizeOptionalText(
+    pickFirstDefined(payload, ['detectedClientSpeaker', 'detected_client_speaker']),
+    TEXT_LIMITS.detectedClientSpeaker
+  );
+  const detectedEmployeeSpeaker = normalizeOptionalText(
+    pickFirstDefined(payload, ['detectedEmployeeSpeaker', 'detected_employee_speaker']),
+    TEXT_LIMITS.detectedEmployeeSpeaker
+  );
+  const speakerRoleConfidence = normalizeOptionalConfidence(
+    pickFirstDefined(payload, ['speakerRoleConfidence', 'speaker_role_confidence'])
+  );
+  const clientGoal = normalizeOptionalText(
+    pickFirstDefined(payload, ['clientGoal', 'client_goal']),
+    TEXT_LIMITS.clientGoal
+  );
+  const employeeResponse = normalizeOptionalText(
+    pickFirstDefined(payload, ['employeeResponse', 'employee_response']),
+    TEXT_LIMITS.employeeResponse
+  );
+  const issueReason = normalizeOptionalText(
+    pickFirstDefined(payload, ['issueReason', 'issue_reason']),
+    TEXT_LIMITS.issueReason
+  );
+  const outcome = normalizeOptionalText(
+    pickFirstDefined(payload, ['outcome']),
+    TEXT_LIMITS.outcome
+  );
+  const nextStepStructured = normalizeOptionalText(
+    pickFirstDefined(payload, ['nextStepStructured', 'next_step_structured']),
+    TEXT_LIMITS.nextStepStructured
+  );
+  const analysisWarnings = normalizeAnalysisWarnings(
+    pickFirstDefined(payload, ['analysisWarnings', 'analysis_warnings'])
+  );
+
+  if (speakerRoleConfidence !== null && speakerRoleConfidence < 0.45 && analysisWarnings.length === 0) {
+    analysisWarnings.push('Низкая уверенность в назначении ролей участников.');
+  }
 
   const normalized = {
     category,
@@ -1058,6 +1372,54 @@ function normalizeAndValidateAnalysis(payload, options = {}) {
 
   if (orderNumber && isOrderNumberExplicitlyMentioned(orderNumber, transcript)) {
     normalized.orderNumber = orderNumber;
+  }
+
+  if (transcriptPlain) {
+    normalized.transcriptPlain = transcriptPlain;
+  }
+
+  if (reconstructedTurns.length > 0) {
+    normalized.reconstructedTurns = reconstructedTurns;
+  }
+
+  if (participantsAssumption) {
+    normalized.participantsAssumption = participantsAssumption;
+  }
+
+  if (detectedClientSpeaker) {
+    normalized.detectedClientSpeaker = detectedClientSpeaker;
+  }
+
+  if (detectedEmployeeSpeaker) {
+    normalized.detectedEmployeeSpeaker = detectedEmployeeSpeaker;
+  }
+
+  if (speakerRoleConfidence !== null) {
+    normalized.speakerRoleConfidence = speakerRoleConfidence;
+  }
+
+  if (clientGoal) {
+    normalized.clientGoal = clientGoal;
+  }
+
+  if (employeeResponse) {
+    normalized.employeeResponse = employeeResponse;
+  }
+
+  if (issueReason) {
+    normalized.issueReason = issueReason;
+  }
+
+  if (outcome) {
+    normalized.outcome = outcome;
+  }
+
+  if (nextStepStructured) {
+    normalized.nextStepStructured = nextStepStructured;
+  }
+
+  if (analysisWarnings.length > 0) {
+    normalized.analysisWarnings = analysisWarnings;
   }
 
   validateNormalizedAnalysis(normalized);

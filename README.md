@@ -11,6 +11,9 @@ Node.js/Express сервис для обработки телефонных зв
 
 - приём и валидация call event
 - анализ транскрипта через `ai-gateway`
+- реконструкция диалога по plain transcript (без отдельного audio diarization provider)
+- confidence-aware summary (осторожный стиль при низкой уверенности в ролях)
+- employee phone directory (lookup сотрудника по внутреннему номеру, active-only)
 - runtime storage на PostgreSQL
 - доставка summary в Telegram
 - production deploy на Yandex VM
@@ -60,6 +63,13 @@ npm run dev
 
 - `GET /healthz` возвращает `ok`
 - тестовый `POST /api/process-call` приводит к отправке summary в Telegram
+
+Дополнительно:
+
+- `npm run smoke:dialog-reconstruction`
+- `npm run smoke:employee-directory`
+- `npm run acceptance:real-calls`
+- `npm run admin:employee-directory -- lookup --phone "+79991234567"`
 
 ## Что не входит в текущую архитектуру
 

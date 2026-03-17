@@ -18,6 +18,33 @@ Current status:
 - [x] Transcript storage + `.txt` transcript button pass is completed locally
 - [x] Telegram callback polling via `getUpdates` pass is completed
 
+## Completed workstream (Dialog reconstruction + employee phone directory, `2026-03-17`)
+
+Scope and status:
+
+- [x] Added schema-only migration for employee phone directory + summary dialog reconstruction fields (`005_employee_directory_dialog_analysis.sql`)
+- [x] Removed business employee seed rows from migration (schema only, production-safe)
+- [x] Added admin CLI for employee directory (`upsert`, `deactivate`, `lookup`) with strict phone normalization
+- [x] Runtime lookup uses only `is_active = true` employee records
+- [x] Added confidence-aware Telegram summary behavior:
+  - [x] high confidence -> explicit role interpretation is allowed
+  - [x] low confidence -> neutral language, uncertainty markers, no confident role claims
+- [x] Added/updated smokes for required cases:
+  - [x] incoming known employee
+  - [x] incoming unknown employee
+  - [x] outgoing known employee
+  - [x] short noisy transcript
+  - [x] long transcript without speaker labels
+  - [x] low confidence role detection
+  - [x] inactive employee record is ignored
+  - [x] phone normalization (`+7`, `8`, spaces, brackets/dashes)
+  - [x] unknown phone does not break flow
+- [x] Manual acceptance batch completed on 10 real DB call records (old vs new Telegram summary):
+  - [x] analyzed: 10
+  - [x] improved: 10
+  - [x] risk: 0
+  - [x] report: `reports/manual-acceptance-real-calls-2026-03-17.md`
+
 Callback polling checklist (this change set only):
 
 - [x] Sync status docs (`DEPLOY_PROGRESS.md`, `TASKS.md`, `README.md`)

@@ -41,6 +41,26 @@ function normalizeGatewayPriorityToUrgency(rawPriority) {
   return '';
 }
 
+function normalizeEmployeeHint(employee) {
+  if (!employee || typeof employee !== 'object' || Array.isArray(employee)) {
+    return null;
+  }
+
+  const phoneNormalized = normalizeOptionalString(employee.phoneNormalized);
+  const employeeName = normalizeOptionalString(employee.employeeName);
+  const employeeTitle = normalizeOptionalString(employee.employeeTitle);
+
+  if (!phoneNormalized || !employeeName || !employeeTitle) {
+    return null;
+  }
+
+  return {
+    phoneNormalized,
+    employeeName,
+    employeeTitle
+  };
+}
+
 function resolveAnalyzeUrl(baseUrl) {
   try {
     const parsed = new URL(baseUrl);
@@ -193,8 +213,17 @@ function createGatewayAnalyzeCall(config) {
       requestId: normalizeOptionalString(payload?.requestId),
       phone: normalizeOptionalString(payload?.phone),
       callDateTime: normalizeOptionalString(payload?.callDateTime),
-      transcript
+      transcript,
+      callType: normalizeOptionalString(payload?.callType),
+      callerNumber: normalizeOptionalString(payload?.callerNumber),
+      calleeNumber: normalizeOptionalString(payload?.calleeNumber),
+      destinationNumber: normalizeOptionalString(payload?.destinationNumber)
     };
+
+    const employeeHint = normalizeEmployeeHint(payload?.employee);
+    if (employeeHint) {
+      requestPayload.employee = employeeHint;
+    }
 
     const abortController = new AbortController();
     const timeoutId = setTimeout(() => {

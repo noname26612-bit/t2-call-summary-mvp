@@ -1,3 +1,5 @@
+const { normalizePhone } = require('../utils/ignoredPhones');
+
 function toDateOrNull(value) {
   if (typeof value !== 'string' || value.trim() === '') {
     return null;
@@ -40,6 +42,37 @@ function normalizePositiveInteger(value, fallback = 0) {
   }
 
   return fallback;
+}
+
+function normalizeJsonArray(value) {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  return JSON.stringify(value);
+}
+
+function normalizeSpeakerRoleConfidence(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    if (value < 0) {
+      return 0;
+    }
+
+    if (value > 1) {
+      return 1;
+    }
+
+    return value;
+  }
+
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value.trim().replace(',', '.'));
+    if (Number.isFinite(parsed)) {
+      return normalizeSpeakerRoleConfidence(parsed);
+    }
+  }
+
+  return null;
 }
 
 function buildPostgresStorage({ pool, logger }) {
@@ -136,9 +169,24 @@ function buildPostgresStorage({ pool, logger }) {
         next_step,
         urgency,
         tags,
-        confidence
+        confidence,
+        transcript_plain,
+        reconstructed_turns,
+        participants_assumption,
+        detected_client_speaker,
+        detected_employee_speaker,
+        speaker_role_confidence,
+        client_goal,
+        employee_response,
+        issue_reason,
+        outcome_structured,
+        next_step_structured,
+        analysis_warnings
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
+      VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9,
+        $10, $11::jsonb, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb
+      )
       ON CONFLICT (call_event_id)
       DO UPDATE
       SET category = EXCLUDED.category,
@@ -148,7 +196,19 @@ function buildPostgresStorage({ pool, logger }) {
           next_step = EXCLUDED.next_step,
           urgency = EXCLUDED.urgency,
           tags = EXCLUDED.tags,
-          confidence = EXCLUDED.confidence
+          confidence = EXCLUDED.confidence,
+          transcript_plain = EXCLUDED.transcript_plain,
+          reconstructed_turns = EXCLUDED.reconstructed_turns,
+          participants_assumption = EXCLUDED.participants_assumption,
+          detected_client_speaker = EXCLUDED.detected_client_speaker,
+          detected_employee_speaker = EXCLUDED.detected_employee_speaker,
+          speaker_role_confidence = EXCLUDED.speaker_role_confidence,
+          client_goal = EXCLUDED.client_goal,
+          employee_response = EXCLUDED.employee_response,
+          issue_reason = EXCLUDED.issue_reason,
+          outcome_structured = EXCLUDED.outcome_structured,
+          next_step_structured = EXCLUDED.next_step_structured,
+          analysis_warnings = EXCLUDED.analysis_warnings
       `,
       [
         callEventId,
@@ -159,7 +219,25 @@ function buildPostgresStorage({ pool, logger }) {
         analysis.nextStep,
         analysis.urgency,
         JSON.stringify(analysis.tags || []),
-        analysis.confidence
+        analysis.confidence,
+        normalizeTranscriptText(analysis.transcriptPlain),
+        normalizeJsonArray(analysis.reconstructedTurns),
+        typeof analysis.participantsAssumption === 'string'
+          ? analysis.participantsAssumption.trim()
+          : null,
+        typeof analysis.detectedClientSpeaker === 'string'
+          ? analysis.detectedClientSpeaker.trim()
+          : null,
+        typeof analysis.detectedEmployeeSpeaker === 'string'
+          ? analysis.detectedEmployeeSpeaker.trim()
+          : null,
+        normalizeSpeakerRoleConfidence(analysis.speakerRoleConfidence),
+        typeof analysis.clientGoal === 'string' ? analysis.clientGoal.trim() : null,
+        typeof analysis.employeeResponse === 'string' ? analysis.employeeResponse.trim() : null,
+        typeof analysis.issueReason === 'string' ? analysis.issueReason.trim() : null,
+        typeof analysis.outcome === 'string' ? analysis.outcome.trim() : null,
+        typeof analysis.nextStepStructured === 'string' ? analysis.nextStepStructured.trim() : null,
+        normalizeJsonArray(analysis.analysisWarnings)
       ]
     );
   }
@@ -207,6 +285,45 @@ function buildPostgresStorage({ pool, logger }) {
     );
 
     return result.rowCount > 0;
+  }
+
+  async function findActiveEmployeeByPhone(phone) {
+    const normalizedPhone = normalizePhone(typeof phone === 'string' ? phone.trim() : '');
+    if (!normalizedPhone) {
+      return null;
+    }
+
+    const result = await pool.query(
+      `
+      SELECT
+        id,
+        phone_normalized,
+        employee_name,
+        employee_title,
+        is_active,
+        notes
+      FROM employee_phone_directory
+      WHERE phone_normalized = $1
+        AND is_active = TRUE
+      LIMIT 1
+      `,
+      [normalizedPhone]
+    );
+
+    if (result.rowCount === 0) {
+      return null;
+    }
+
+    const row = result.rows[0];
+
+    return {
+      id: Number.isSafeInteger(Number(row.id)) ? Number(row.id) : null,
+      phoneNormalized: typeof row.phone_normalized === 'string' ? row.phone_normalized : normalizedPhone,
+      employeeName: typeof row.employee_name === 'string' ? row.employee_name : '',
+      employeeTitle: typeof row.employee_title === 'string' ? row.employee_title : '',
+      isActive: row.is_active === true,
+      notes: typeof row.notes === 'string' ? row.notes : ''
+    };
   }
 
   async function seedIgnoreList(phones, source = 'env_bootstrap') {
@@ -407,6 +524,7 @@ function buildPostgresStorage({ pool, logger }) {
     saveSummary,
     saveTelegramDelivery,
     isPhoneIgnored,
+    findActiveEmployeeByPhone,
     seedIgnoreList,
     acquireDedupKey,
     completeDedupKey,

@@ -212,6 +212,28 @@ const CASES = [
     }
   },
   {
+    title: 'Tele2 SINGLE_CHANNEL maps to incoming and subscriber from destination',
+    transcript: 'Клиент позвонил на линию для уточнения ремонта.',
+    payload: {
+      category: 'сервис',
+      primaryScenario: 'Ремонт',
+      wantedSummary: 'Клиент уточнил детали ремонта.'
+    },
+    callContext: {
+      callType: 'SINGLE_CHANNEL',
+      callerNumber: '+7 999 111-22-33',
+      destinationNumber: '8 (495) 123-45-67',
+      calleeNumber: '+7 (495) 123-45-67'
+    },
+    expected: {
+      category: 'Ремонт',
+      hasCompanyLine: false,
+      hasOrderLine: false,
+      callType: 'Входящий',
+      subscriber: '+74951234567'
+    }
+  },
+  {
     title: 'Unknown call type keeps placeholders',
     transcript: 'Клиент задал вопрос по общим условиям.',
     payload: {

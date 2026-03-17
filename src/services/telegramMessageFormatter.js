@@ -1,5 +1,9 @@
 const { parseDateOrNull } = require('../utils/dateTime');
 const { normalizePhone } = require('../utils/ignoredPhones');
+const {
+  normalizeCallType,
+  resolveEmployeePhoneFromCallMeta
+} = require('../utils/callParticipants');
 
 const EMPTY_VALUE = '—';
 
@@ -111,19 +115,6 @@ function pickFirstNonEmptyString(values) {
   return '';
 }
 
-function normalizeCallType(value) {
-  const normalized = normalizeSingleLine(value).toUpperCase();
-  if (normalized === 'INCOMING' || normalized === 'INBOUND') {
-    return 'INCOMING';
-  }
-
-  if (normalized === 'OUTGOING' || normalized === 'OUTBOUND') {
-    return 'OUTGOING';
-  }
-
-  return '';
-}
-
 function resolveCallTypeLabel(callType) {
   const normalizedCallType = normalizeCallType(callType);
   if (normalizedCallType === 'INCOMING') {
@@ -148,15 +139,18 @@ function normalizePhoneText(value) {
 
 function resolveSubscriberPhone({ callType, callerNumber, calleeNumber, destinationNumber }) {
   const normalizedCallType = normalizeCallType(callType);
-
-  let sourcePhone = '';
-  if (normalizedCallType === 'OUTGOING') {
-    sourcePhone = pickFirstNonEmptyString([callerNumber]);
-  } else if (normalizedCallType === 'INCOMING') {
-    sourcePhone = pickFirstNonEmptyString([destinationNumber, calleeNumber]);
+  if (!normalizedCallType) {
+    return '';
   }
 
-  if (!sourcePhone) {
+  const sourcePhone = resolveEmployeePhoneFromCallMeta({
+    callType: normalizedCallType,
+    callerNumber,
+    calleeNumber,
+    destinationNumber
+  });
+
+  if (!isNonEmptyString(sourcePhone)) {
     return '';
   }
 
@@ -369,7 +363,7 @@ function appendOptionalDetailsToWantedText(wantedText, { companyName, orderNumbe
   return normalizeSingleLine(`${wantedText}${separator}${suffix}`);
 }
 
-function stripStatusSentences(rawText) {
+function stripStatusSentences(rawText, maxSentences = 2) {
   const chunks = sentenceChunks(rawText);
   if (chunks.length === 0) {
     return normalizeSingleLine(rawText);
@@ -381,20 +375,148 @@ function stripStatusSentences(rawText) {
   }
 
   return kept
-    .slice(0, 2)
+    .slice(0, Math.max(1, maxSentences))
     .map((chunk) => (/[.!?]$/.test(chunk) ? chunk : `${chunk}.`))
     .join(' ')
     .trim();
 }
 
+function normalizeConfidenceScore(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    if (value < 0) {
+      return 0;
+    }
+
+    if (value > 1) {
+      return 1;
+    }
+
+    return value;
+  }
+
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value.trim().replace(',', '.'));
+    if (Number.isFinite(parsed)) {
+      return normalizeConfidenceScore(parsed);
+    }
+  }
+
+  return null;
+}
+
+function resolveRoleConfidenceMode(analysis) {
+  const score = normalizeConfidenceScore(analysis?.speakerRoleConfidence);
+  const warnings = Array.isArray(analysis?.analysisWarnings)
+    ? analysis.analysisWarnings.map((item) => normalizeOptionalText(item).toLowerCase()).filter(Boolean)
+    : [];
+  const hasLowConfidenceWarning = warnings.some((item) => item.includes('низкая') && item.includes('уверенн'));
+
+  if (score !== null && score >= 0.72 && !hasLowConfidenceWarning) {
+    return 'high';
+  }
+
+  if ((score !== null && score < 0.55) || hasLowConfidenceWarning) {
+    return 'low';
+  }
+
+  return 'neutral';
+}
+
+function getPrimaryWarning(analysis) {
+  if (!Array.isArray(analysis?.analysisWarnings)) {
+    return '';
+  }
+
+  for (const item of analysis.analysisWarnings) {
+    const normalized = normalizeOptionalText(item);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return '';
+}
+
+function buildStructuredWantedLines(analysis) {
+  const clientGoal = normalizeOptionalText(analysis?.clientGoal);
+  const issueReason = normalizeOptionalText(analysis?.issueReason);
+  const employeeResponse = normalizeOptionalText(analysis?.employeeResponse);
+  const outcome = normalizeOptionalText(analysis?.outcome);
+  const nextStepStructured = normalizeOptionalText(analysis?.nextStepStructured);
+  const primaryWarning = getPrimaryWarning(analysis);
+  const confidenceMode = resolveRoleConfidenceMode(analysis);
+  const lines = [];
+  const seen = new Set();
+
+  function appendLine(value) {
+    const normalized = normalizeSingleLine(value);
+    if (!normalized) {
+      return;
+    }
+
+    const dedupeKey = normalized.toLowerCase();
+    if (seen.has(dedupeKey)) {
+      return;
+    }
+
+    seen.add(dedupeKey);
+    lines.push(normalized);
+  }
+
+  if (confidenceMode === 'high') {
+    if (clientGoal) {
+      appendLine(`Клиент: ${clientGoal}`);
+    }
+
+    if (issueReason) {
+      appendLine(`Суть запроса: ${issueReason}`);
+    }
+
+    if (employeeResponse) {
+      appendLine(`Сотрудник: ${employeeResponse}`);
+    }
+  } else {
+    if (clientGoal) {
+      appendLine(`По разговору запрос: ${clientGoal}`);
+    }
+
+    if (primaryWarning) {
+      appendLine(`Неопределенность: ${primaryWarning}`);
+    }
+
+    if (issueReason) {
+      appendLine(`Основная тема: ${issueReason}`);
+    }
+
+    if (employeeResponse) {
+      appendLine(`Прозвучал ответ: ${employeeResponse}`);
+    }
+  }
+
+  if (outcome) {
+    appendLine(confidenceMode === 'high' ? `Итог: ${outcome}` : `Итог по фактам: ${outcome}`);
+  }
+
+  if (nextStepStructured) {
+    appendLine(confidenceMode === 'low'
+      ? `Возможный следующий шаг: ${nextStepStructured}`
+      : `Дальше: ${nextStepStructured}`);
+  }
+
+  return lines.slice(0, 4);
+}
+
 function buildWantedText(analysis, { companyName, orderNumber }) {
+  const structuredLines = buildStructuredWantedLines(analysis);
   const fromWantedSummary = normalizeWantedLines(analysis?.wantedSummary);
   const fallbackCandidates = [
     ...sentenceChunks(analysis?.summary),
     ...sentenceChunks(analysis?.topic)
   ];
 
-  const merged = fromWantedSummary.length > 0 ? fromWantedSummary : fallbackCandidates;
+  const merged = structuredLines.length > 0
+    ? [...structuredLines, ...fromWantedSummary, ...fallbackCandidates]
+    : (fromWantedSummary.length > 0 ? fromWantedSummary : fallbackCandidates);
   const unique = [];
   const seen = new Set();
 
@@ -409,11 +531,12 @@ function buildWantedText(analysis, { companyName, orderNumber }) {
   }
 
   const withoutStatusLines = unique.filter((line) => !lineLooksLikeStatus(line));
-  const selected = (withoutStatusLines.length > 0 ? withoutStatusLines : unique).slice(0, 2);
+  const maxLines = structuredLines.length > 0 ? 3 : 2;
+  const selected = (withoutStatusLines.length > 0 ? withoutStatusLines : unique).slice(0, maxLines);
 
-  let wantedText = stripStatusSentences(selected.join(' '));
+  let wantedText = stripStatusSentences(selected.join(' '), maxLines);
   if (!wantedText) {
-    wantedText = stripStatusSentences(normalizeSingleLine(analysis?.summary));
+    wantedText = stripStatusSentences(normalizeSingleLine(analysis?.summary), 2);
   }
   if (!wantedText) {
     wantedText = 'Запрос клиента зафиксирован.';
@@ -422,10 +545,30 @@ function buildWantedText(analysis, { companyName, orderNumber }) {
   return appendOptionalDetailsToWantedText(wantedText, { companyName, orderNumber });
 }
 
+function formatEmployeeSummaryLine(employee) {
+  if (!isPlainObject(employee)) {
+    return '';
+  }
+
+  const employeeName = normalizeOptionalText(employee.employeeName);
+  const employeeTitle = normalizeOptionalText(employee.employeeTitle);
+
+  if (!employeeName) {
+    return '';
+  }
+
+  if (employeeTitle) {
+    return `${employeeName}, ${employeeTitle}`;
+  }
+
+  return employeeName;
+}
+
 function formatTelegramCallSummary({
   phone,
   callDateTime,
   analysis,
+  employee,
   timeZone = 'Europe/Moscow',
   callType,
   callerNumber,
@@ -446,6 +589,7 @@ function formatTelegramCallSummary({
   const companyName = normalizeOptionalText(normalizedAnalysis.companyName);
   const orderNumber = normalizeOptionalText(normalizedAnalysis.orderNumber);
   const wantedText = buildWantedText(normalizedAnalysis, { companyName, orderNumber });
+  const employeeSummaryLine = formatEmployeeSummaryLine(employee);
 
   const lines = [
     `Тип звонка: ${callTypeText}`,
@@ -459,7 +603,15 @@ function formatTelegramCallSummary({
     `Категория: ${primaryScenario}`
   ];
 
-  if (companyName || orderNumber) {
+  if (employeeSummaryLine || companyName || orderNumber) {
+    lines.push('');
+  }
+
+  if (employeeSummaryLine) {
+    lines.push(`Сотрудник: ${employeeSummaryLine}`);
+  }
+
+  if (employeeSummaryLine && (companyName || orderNumber)) {
     lines.push('');
   }
 

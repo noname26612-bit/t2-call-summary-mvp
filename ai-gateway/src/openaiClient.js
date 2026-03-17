@@ -22,6 +22,17 @@ const MAX_TEXT_LENGTH = Object.freeze({
   summary: 220,
   outcome: 180,
   nextStep: 180,
+  transcriptPlain: 20000,
+  participantsAssumption: 120,
+  detectedClientSpeaker: 80,
+  detectedEmployeeSpeaker: 80,
+  clientGoal: 220,
+  employeeResponse: 220,
+  issueReason: 220,
+  nextStepStructured: 220,
+  analysisWarningItem: 180,
+  reconstructedTurnSpeaker: 80,
+  reconstructedTurnText: 220,
   wantedSummary: 420,
   partsItem: 80,
   rentalStart: 80,
@@ -99,6 +110,85 @@ const ANALYSIS_SCHEMA = {
       minLength: 1,
       maxLength: MAX_TEXT_LENGTH.wantedSummary
     },
+    participantsAssumption: {
+      type: 'string',
+      minLength: 1,
+      maxLength: MAX_TEXT_LENGTH.participantsAssumption
+    },
+    detectedClientSpeaker: {
+      type: 'string',
+      minLength: 1,
+      maxLength: MAX_TEXT_LENGTH.detectedClientSpeaker
+    },
+    detectedEmployeeSpeaker: {
+      type: 'string',
+      minLength: 1,
+      maxLength: MAX_TEXT_LENGTH.detectedEmployeeSpeaker
+    },
+    speakerRoleConfidence: {
+      type: 'number',
+      minimum: 0,
+      maximum: 1
+    },
+    clientGoal: {
+      type: 'string',
+      minLength: 1,
+      maxLength: MAX_TEXT_LENGTH.clientGoal
+    },
+    employeeResponse: {
+      type: 'string',
+      minLength: 1,
+      maxLength: MAX_TEXT_LENGTH.employeeResponse
+    },
+    issueReason: {
+      type: 'string',
+      minLength: 1,
+      maxLength: MAX_TEXT_LENGTH.issueReason
+    },
+    nextStepStructured: {
+      type: 'string',
+      minLength: 1,
+      maxLength: MAX_TEXT_LENGTH.nextStepStructured
+    },
+    reconstructedTurns: {
+      type: 'array',
+      maxItems: 20,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['speaker', 'role', 'text', 'confidence'],
+        properties: {
+          speaker: {
+            type: 'string',
+            minLength: 1,
+            maxLength: MAX_TEXT_LENGTH.reconstructedTurnSpeaker
+          },
+          role: {
+            type: 'string',
+            enum: ['client', 'employee', 'unknown']
+          },
+          text: {
+            type: 'string',
+            minLength: 1,
+            maxLength: MAX_TEXT_LENGTH.reconstructedTurnText
+          },
+          confidence: {
+            type: 'number',
+            minimum: 0,
+            maximum: 1
+          }
+        }
+      }
+    },
+    analysisWarnings: {
+      type: 'array',
+      maxItems: 8,
+      items: {
+        type: 'string',
+        minLength: 1,
+        maxLength: MAX_TEXT_LENGTH.analysisWarningItem
+      }
+    },
     partsRequested: {
       type: 'array',
       maxItems: 10,
@@ -169,6 +259,17 @@ const SYSTEM_PROMPT = `
 Поле tags: массив строк от 1 до 5 тегов без дублей.
 Поле primaryScenario: одно значение из [Запчасти, Аренда, Ремонт, Доставка, Другое].
 Поле wantedSummary: 2-4 короткие строки по сути запроса без воды.
+Поле participantsAssumption: коротко зафиксируй рабочее предположение о составе участников (по умолчанию 2: клиент и сотрудник).
+Поля detectedClientSpeaker / detectedEmployeeSpeaker: укажи условные метки говорящих (например "S1"/"S2"), если удалось определить.
+Поле speakerRoleConfidence: уверенность в назначении ролей (0..1).
+Поля clientGoal / employeeResponse / issueReason / outcome / nextStepStructured:
+- что хотел клиент;
+- что ответил сотрудник;
+- в чем суть проблемы/запроса;
+- чем закончился разговор;
+- есть ли явный следующий шаг.
+Поле reconstructedTurns: 3-20 реплик в порядке разговора (speaker, role, text, confidence optional).
+Поле analysisWarnings: неопределенности/сомнения (например низкая уверенность роли, шумный транскрипт, мало фактов).
 
 Правила по сценариям:
 - один звонок = один primaryScenario
@@ -185,11 +286,18 @@ const SYSTEM_PROMPT = `
 - если время относительное и точное (например "через 3 дня"), считай от callDateTime
 - если срок неточный (например "через 2-3 недели"), не придумывай точную дату, оставляй текстом (например "примерно через 2-3 недели")
 
+Правила роли/диалога:
+- не используй внешние знания, опирайся только на transcript и служебные подсказки.
+- не выдумывай реплики, которых нет; reconstructedTurns — краткая реконструкция по фактам.
+- если уверенность в ролях низкая (< 0.5), явно укажи это в analysisWarnings и не делай уверенных утверждений.
+- если передан employee hint (имя/должность/номер), используй его как подсказку, но не как абсолютный факт.
+
 Если данных мало, ставь:
 - category: "прочее"
 - priority: "low"
 - primaryScenario: "Другое"
 - нейтральные формулировки в summary/outcome/nextStep/wantedSummary.
+- speakerRoleConfidence <= 0.5 и минимум одно предупреждение в analysisWarnings.
 `;
 
 const PRIMARY_SCENARIO_BY_CATEGORY = Object.freeze({
@@ -499,7 +607,102 @@ function normalizeTags(rawTags) {
   return tags;
 }
 
-function normalizeAndValidateAnalysis(raw) {
+function normalizeOptionalConfidence(rawConfidence) {
+  if (rawConfidence === null || rawConfidence === undefined || rawConfidence === '') {
+    return null;
+  }
+
+  if (typeof rawConfidence === 'number' && Number.isFinite(rawConfidence)) {
+    if (rawConfidence < 0) {
+      return 0;
+    }
+
+    if (rawConfidence > 1) {
+      return 1;
+    }
+
+    return rawConfidence;
+  }
+
+  if (typeof rawConfidence === 'string' && rawConfidence.trim() !== '') {
+    const parsed = Number(rawConfidence.trim().replace(',', '.'));
+    if (Number.isFinite(parsed)) {
+      return normalizeOptionalConfidence(parsed);
+    }
+  }
+
+  return null;
+}
+
+function normalizeReconstructedTurns(rawTurns) {
+  if (!Array.isArray(rawTurns)) {
+    return [];
+  }
+
+  const turns = [];
+  for (const rawTurn of rawTurns) {
+    if (!rawTurn || typeof rawTurn !== 'object' || Array.isArray(rawTurn)) {
+      continue;
+    }
+
+    const speaker = normalizeOptionalText(rawTurn.speaker, MAX_TEXT_LENGTH.reconstructedTurnSpeaker);
+    const text = normalizeOptionalText(rawTurn.text, MAX_TEXT_LENGTH.reconstructedTurnText);
+    const roleRaw = normalizeOptionalText(rawTurn.role, 24).toLowerCase();
+    const role = ['client', 'employee', 'unknown'].includes(roleRaw) ? roleRaw : 'unknown';
+    const confidence = normalizeOptionalConfidence(rawTurn.confidence);
+
+    if (!speaker || !text) {
+      continue;
+    }
+
+    const turn = {
+      speaker,
+      role,
+      text
+    };
+
+    if (confidence !== null) {
+      turn.confidence = confidence;
+    }
+
+    turns.push(turn);
+    if (turns.length >= 20) {
+      break;
+    }
+  }
+
+  return turns;
+}
+
+function normalizeAnalysisWarnings(rawWarnings) {
+  const warnings = [];
+  const seen = new Set();
+  const source = Array.isArray(rawWarnings)
+    ? rawWarnings
+    : (typeof rawWarnings === 'string' ? rawWarnings.split(/[;\n|]+/) : []);
+
+  for (const rawWarning of source) {
+    const warning = normalizeOptionalText(rawWarning, MAX_TEXT_LENGTH.analysisWarningItem);
+    if (!warning) {
+      continue;
+    }
+
+    const dedupeKey = warning.toLowerCase();
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+
+    seen.add(dedupeKey);
+    warnings.push(warning);
+    if (warnings.length >= 8) {
+      break;
+    }
+  }
+
+  return warnings;
+}
+
+function normalizeAndValidateAnalysis(raw, options = {}) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new OpenAIClientError('Polza returned invalid analysis payload shape', 502, 'POLZA_INVALID_PAYLOAD');
   }
@@ -595,6 +798,73 @@ function normalizeAndValidateAnalysis(raw) {
   const orderNumber = normalizeOptionalText(raw.orderNumber, MAX_TEXT_LENGTH.orderNumber);
   if (orderNumber) {
     normalized.orderNumber = orderNumber;
+  }
+
+  const transcriptPlain = clampMultilineText(stringFromUnknown(options.transcript), MAX_TEXT_LENGTH.transcriptPlain);
+  if (transcriptPlain) {
+    normalized.transcriptPlain = transcriptPlain;
+  }
+
+  const participantsAssumption = normalizeOptionalText(
+    raw.participantsAssumption,
+    MAX_TEXT_LENGTH.participantsAssumption
+  ) || 'Предположение: два участника разговора (клиент и сотрудник).';
+  if (participantsAssumption) {
+    normalized.participantsAssumption = participantsAssumption;
+  }
+
+  const detectedClientSpeaker = normalizeOptionalText(
+    raw.detectedClientSpeaker,
+    MAX_TEXT_LENGTH.detectedClientSpeaker
+  );
+  if (detectedClientSpeaker) {
+    normalized.detectedClientSpeaker = detectedClientSpeaker;
+  }
+
+  const detectedEmployeeSpeaker = normalizeOptionalText(
+    raw.detectedEmployeeSpeaker,
+    MAX_TEXT_LENGTH.detectedEmployeeSpeaker
+  );
+  if (detectedEmployeeSpeaker) {
+    normalized.detectedEmployeeSpeaker = detectedEmployeeSpeaker;
+  }
+
+  const speakerRoleConfidence = normalizeOptionalConfidence(raw.speakerRoleConfidence);
+  if (speakerRoleConfidence !== null) {
+    normalized.speakerRoleConfidence = speakerRoleConfidence;
+  }
+
+  const clientGoal = normalizeOptionalText(raw.clientGoal, MAX_TEXT_LENGTH.clientGoal);
+  if (clientGoal) {
+    normalized.clientGoal = clientGoal;
+  }
+
+  const employeeResponse = normalizeOptionalText(raw.employeeResponse, MAX_TEXT_LENGTH.employeeResponse);
+  if (employeeResponse) {
+    normalized.employeeResponse = employeeResponse;
+  }
+
+  const issueReason = normalizeOptionalText(raw.issueReason, MAX_TEXT_LENGTH.issueReason);
+  if (issueReason) {
+    normalized.issueReason = issueReason;
+  }
+
+  const nextStepStructured = normalizeOptionalText(raw.nextStepStructured, MAX_TEXT_LENGTH.nextStepStructured);
+  if (nextStepStructured) {
+    normalized.nextStepStructured = nextStepStructured;
+  }
+
+  const reconstructedTurns = normalizeReconstructedTurns(raw.reconstructedTurns);
+  if (reconstructedTurns.length > 0) {
+    normalized.reconstructedTurns = reconstructedTurns;
+  }
+
+  const analysisWarnings = normalizeAnalysisWarnings(raw.analysisWarnings);
+  if (speakerRoleConfidence !== null && speakerRoleConfidence < 0.5 && analysisWarnings.length === 0) {
+    analysisWarnings.push('Низкая уверенность в назначении ролей участников.');
+  }
+  if (analysisWarnings.length > 0) {
+    normalized.analysisWarnings = analysisWarnings;
   }
 
   if (normalized.tags.length === 0) {
@@ -761,11 +1031,38 @@ function safeRemoveFile(filePath) {
   }
 }
 
+function buildEmployeeHint(payload) {
+  const employee = payload?.employee;
+  if (!employee || typeof employee !== 'object' || Array.isArray(employee)) {
+    return 'none';
+  }
+
+  const employeeName = normalizeOptionalText(employee.employeeName, 120);
+  const employeeTitle = normalizeOptionalText(employee.employeeTitle, 120);
+  const phoneNormalized = normalizeOptionalText(employee.phoneNormalized, 40);
+
+  if (!employeeName || !employeeTitle || !phoneNormalized) {
+    return 'none';
+  }
+
+  return `${employeeName}, ${employeeTitle}, ${phoneNormalized}`;
+}
+
 function buildUserPrompt(payload) {
+  const callType = normalizeOptionalText(payload.callType, 24) || 'unknown';
+  const callerNumber = normalizeOptionalText(payload.callerNumber, 40) || 'unknown';
+  const calleeNumber = normalizeOptionalText(payload.calleeNumber, 40) || 'unknown';
+  const destinationNumber = normalizeOptionalText(payload.destinationNumber, 40) || 'unknown';
+
   const lines = [
     'Сформируй структурированный анализ по транскрипту звонка.',
     `phone: ${isNonEmptyString(payload.phone) ? payload.phone.trim() : 'unknown'}`,
     `callDateTime: ${isNonEmptyString(payload.callDateTime) ? payload.callDateTime.trim() : 'unknown'}`,
+    `callType: ${callType}`,
+    `callerNumber: ${callerNumber}`,
+    `calleeNumber: ${calleeNumber}`,
+    `destinationNumber: ${destinationNumber}`,
+    `employeeHint: ${buildEmployeeHint(payload)}`,
     'transcript:',
     payload.transcript
   ];
@@ -787,7 +1084,7 @@ function createOpenAIAnalyzer(config, logger) {
           type: 'json_schema',
           json_schema: {
             name: 'call_analysis_gateway',
-            strict: true,
+            strict: false,
             schema: ANALYSIS_SCHEMA
           }
         },
@@ -830,7 +1127,9 @@ function createOpenAIAnalyzer(config, logger) {
       );
     }
 
-    const normalized = normalizeAndValidateAnalysis(parsedJson);
+    const normalized = normalizeAndValidateAnalysis(parsedJson, {
+      transcript: payload.transcript
+    });
 
     logger.info('polza_analysis_success', {
       requestId: payload.requestId || '',

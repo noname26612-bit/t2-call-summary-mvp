@@ -1,5 +1,9 @@
 const { normalizePhone } = require('../utils/ignoredPhones');
 const { buildTranscriptHash, buildDedupKey } = require('../utils/dedup');
+const {
+  normalizeCallType,
+  resolveEmployeePhoneFromCallMeta
+} = require('../utils/callParticipants');
 
 function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim() !== '';
@@ -54,10 +58,34 @@ function normalizeOptionalPhone(value) {
 
 function resolveOptionalCallMeta(payload = {}) {
   return {
-    callType: isNonEmptyString(payload.callType) ? payload.callType.trim() : '',
+    callType: normalizeCallType(payload.callType),
     callerNumber: normalizeOptionalPhone(payload.callerNumber),
     calleeNumber: normalizeOptionalPhone(payload.calleeNumber),
     destinationNumber: normalizeOptionalPhone(payload.destinationNumber)
+  };
+}
+
+function normalizeEmployeeRecord(rawEmployee) {
+  if (!rawEmployee || typeof rawEmployee !== 'object' || Array.isArray(rawEmployee)) {
+    return null;
+  }
+
+  const employeeName = isNonEmptyString(rawEmployee.employeeName) ? rawEmployee.employeeName.trim() : '';
+  const employeeTitle = isNonEmptyString(rawEmployee.employeeTitle) ? rawEmployee.employeeTitle.trim() : '';
+  const phoneNormalized = isNonEmptyString(rawEmployee.phoneNormalized)
+    ? normalizePhone(rawEmployee.phoneNormalized.trim())
+    : '';
+  const id = Number.isSafeInteger(rawEmployee.id) ? rawEmployee.id : null;
+
+  if (!employeeName || !employeeTitle || !phoneNormalized) {
+    return null;
+  }
+
+  return {
+    id,
+    phoneNormalized,
+    employeeName,
+    employeeTitle
   };
 }
 
@@ -95,6 +123,9 @@ function createCallProcessor({ storage, analyzeCall, sendTelegramMessage, logger
     const callDateTime = payload.callDateTime.trim();
     const transcript = payload.transcript.trim();
     const callMeta = resolveOptionalCallMeta(payload);
+    const employeePhone = callMeta.callType
+      ? normalizeOptionalPhone(resolveEmployeePhoneFromCallMeta(callMeta))
+      : '';
     const requestId = isNonEmptyString(options.requestId) ? options.requestId.trim() : '';
     const source = getHistorySource(options.source);
     const transcriptHash = buildTranscriptHash(transcript);
@@ -117,13 +148,31 @@ function createCallProcessor({ storage, analyzeCall, sendTelegramMessage, logger
     });
 
     const callEventId = callEvent.id;
+    let employee = null;
+
+    if (employeePhone && typeof storage.findActiveEmployeeByPhone === 'function') {
+      try {
+        employee = normalizeEmployeeRecord(
+          await storage.findActiveEmployeeByPhone(employeePhone)
+        );
+      } catch (error) {
+        logger.warn('employee_directory_lookup_failed', {
+          callEventId,
+          employeePhone,
+          error
+        });
+      }
+    }
 
     await appendAuditSafely({
       callEventId,
       eventType: 'call_received',
       payload: {
         source,
-        dedupKey
+        dedupKey,
+        callType: callMeta.callType,
+        employeePhone,
+        employeeId: employee?.id || null
       }
     });
 
@@ -190,7 +239,12 @@ function createCallProcessor({ storage, analyzeCall, sendTelegramMessage, logger
         requestId,
         phone,
         callDateTime,
-        transcript
+        transcript,
+        callType: callMeta.callType,
+        callerNumber: callMeta.callerNumber,
+        calleeNumber: callMeta.calleeNumber,
+        destinationNumber: callMeta.destinationNumber,
+        employee
       });
 
       await storage.saveSummary({
@@ -213,6 +267,7 @@ function createCallProcessor({ storage, analyzeCall, sendTelegramMessage, logger
         phone,
         callDateTime,
         analysis,
+        employee,
         ...callMeta
       });
 

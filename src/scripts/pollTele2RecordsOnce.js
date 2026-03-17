@@ -8,6 +8,7 @@ const dotenv = require('dotenv');
 const { loadConfig } = require('../config/env');
 const { createPgPool } = require('../db/createPgPool');
 const { createLogger, serializeError } = require('../services/logger');
+const { resolveClientPhoneFromCallMeta } = require('../utils/callParticipants');
 
 dotenv.config();
 
@@ -418,25 +419,13 @@ function pickFirstNonEmptyString(values) {
 }
 
 function resolvePhoneFromRecord(record) {
-  const callType = isNonEmptyString(record?.callType)
-    ? record.callType.trim().toUpperCase()
-    : '';
-
-  if (callType === 'OUTGOING') {
-    return pickFirstNonEmptyString([
-      record.destinationNumber,
-      record.calleeNumber,
-      record.callerNumber,
-      record.phone
-    ]);
-  }
-
-  return pickFirstNonEmptyString([
-    record.callerNumber,
-    record.destinationNumber,
-    record.calleeNumber,
-    record.phone
-  ]);
+  return resolveClientPhoneFromCallMeta({
+    callType: record?.callType,
+    phone: record?.phone,
+    callerNumber: record?.callerNumber,
+    calleeNumber: record?.calleeNumber,
+    destinationNumber: record?.destinationNumber
+  });
 }
 
 function buildProcessCallPayload({

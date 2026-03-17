@@ -12,6 +12,10 @@
     "smoke:transcript-button": "node src/scripts/smokeTranscriptButtonFlow.js",
     "smoke:tele2-poll-runtime-path": "node src/scripts/smokeTele2PollRuntimePath.js",
     "smoke:telegram-callback-polling": "node src/scripts/smokeTelegramCallbackPolling.js",
+    "smoke:dialog-reconstruction": "node src/scripts/smokeDialogReconstructionFlow.js",
+    "smoke:employee-directory": "node src/scripts/smokeEmployeeDirectoryLookup.js",
+    "admin:employee-directory": "node src/scripts/adminEmployeeDirectory.js",
+    "acceptance:real-calls": "node src/scripts/manualAcceptanceRealCalls.js",
     "manual:tele2-record": "node src/scripts/processTele2RecordManual.js",
     "tele2:poll-once": "node src/scripts/pollTele2RecordsOnce.js"
   },

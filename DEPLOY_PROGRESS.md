@@ -37,6 +37,40 @@ These decisions are considered fixed unless explicitly changed:
 - host-level VM health check for gateway: `http://127.0.0.1:3001/healthz`
 - `ai-gateway` is not used as a separate public service
 
+## Completed narrow pass (`2026-03-17`): dialog reconstruction + employee phone directory
+
+Implemented and verified in feature branch:
+
+- schema-only migration for:
+  - `employee_phone_directory`
+  - dialog reconstruction storage fields in `summaries`
+- no business seed rows in migration; employee records are managed only via admin flow
+- admin CLI added for safe directory maintenance:
+  - `node src/scripts/adminEmployeeDirectory.js upsert ...`
+  - `node src/scripts/adminEmployeeDirectory.js deactivate ...`
+  - `node src/scripts/adminEmployeeDirectory.js lookup ...`
+- runtime employee lookup uses only active directory rows (`is_active = TRUE`)
+- Telegram summary formatter uses confidence gate:
+  - high confidence -> explicit role phrasing
+  - low confidence -> neutral phrasing + uncertainty markers
+- phone normalization/lookup checks passed for:
+  - `+7XXXXXXXXXX`
+  - `8XXXXXXXXXX`
+  - numbers with spaces
+  - numbers with brackets/dashes
+  - inactive/unknown numbers
+- local smoke suite passed:
+  - `smoke:dialog-reconstruction`
+  - `smoke:employee-directory`
+  - `smoke:telegram-v2`
+  - `smoke:tele2-poll-runtime-path`
+  - `smoke:transcript-button`
+  - `smoke:telegram-callback-polling`
+- manual acceptance report generated on real DB call rows (10 records):
+  - command: `npm run acceptance:real-calls`
+  - result: `improved=10`, `risk=0`
+  - artifact: `reports/manual-acceptance-real-calls-2026-03-17.md`
+
 ## Completed workstream (Telegram callback polling via `getUpdates`)
 
 Baseline status:
