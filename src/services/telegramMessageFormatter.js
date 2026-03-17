@@ -113,7 +113,7 @@ function pickFirstNonEmptyString(values) {
 
 function normalizeCallType(value) {
   const normalized = normalizeSingleLine(value).toUpperCase();
-  if (normalized === 'INCOMING' || normalized === 'INBOUND') {
+  if (normalized === 'INCOMING' || normalized === 'INBOUND' || normalized === 'SINGLE_CHANNEL') {
     return 'INCOMING';
   }
 

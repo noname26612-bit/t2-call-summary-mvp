@@ -150,7 +150,7 @@ async function run() {
 
     const incomingRecord = {
       recordFileName: 'incoming-001',
-      callType: 'INCOMING',
+      callType: 'SINGLE_CHANNEL',
       callerNumber: '+7 999 100-00-01',
       destinationNumber: '8 (495) 111-22-33',
       calleeNumber: '+7 (495) 111-22-33',
@@ -186,7 +186,7 @@ async function run() {
       transcript: 'Сотрудник перезвонил клиенту по ремонту.'
     });
 
-    assert.equal(incomingPayload.callType, 'INCOMING');
+    assert.equal(incomingPayload.callType, 'SINGLE_CHANNEL');
     assert.equal(incomingPayload.callerNumber, '+7 999 100-00-01');
     assert.equal(incomingPayload.destinationNumber, '8 (495) 111-22-33');
     assert.equal(outgoingPayload.callType, 'OUTGOING');
