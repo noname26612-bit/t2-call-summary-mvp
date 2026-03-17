@@ -2,6 +2,7 @@ const { formatTelegramCallSummary } = require('./telegramMessageFormatter');
 
 const TRANSCRIPT_CALLBACK_PREFIX = 'transcript:';
 const TRANSCRIPT_BUTTON_LABEL = 'Транскрипт (.txt)';
+const KNOWN_CALL_TYPES = new Set(['INCOMING', 'INBOUND', 'OUTGOING', 'OUTBOUND', 'SINGLE_CHANNEL']);
 
 class TelegramConfigurationError extends Error {
   constructor(message, code) {
@@ -58,6 +59,14 @@ function normalizePositiveInteger(value, fallback = null) {
   }
 
   return fallback;
+}
+
+function normalizeCallTypeForWarning(value) {
+  if (!isNonEmptyString(value)) {
+    return '';
+  }
+
+  return value.trim().toUpperCase();
 }
 
 function buildTranscriptCallbackData(callEventId) {
@@ -310,6 +319,14 @@ function createTelegramSender(config, logger) {
     calleeNumber,
     destinationNumber
   }) {
+    const rawCallType = normalizeCallTypeForWarning(callType);
+    if (rawCallType && !KNOWN_CALL_TYPES.has(rawCallType)) {
+      logger.warn('telegram_unknown_call_type', {
+        callEventId,
+        callType: rawCallType
+      });
+    }
+
     const text = formatTelegramCallSummary({
       phone,
       callDateTime,
