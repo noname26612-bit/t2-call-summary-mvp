@@ -16,6 +16,7 @@
     "smoke:employee-directory": "node src/scripts/smokeEmployeeDirectoryLookup.js",
     "admin:employee-directory": "node src/scripts/adminEmployeeDirectory.js",
     "acceptance:real-calls": "node src/scripts/manualAcceptanceRealCalls.js",
+    "audit:call-meta": "node src/scripts/reportCallMetaCoverage.js",
     "manual:tele2-record": "node src/scripts/processTele2RecordManual.js",
     "tele2:poll-once": "node src/scripts/pollTele2RecordsOnce.js"
   },

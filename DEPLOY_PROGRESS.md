@@ -71,6 +71,14 @@ Implemented and verified in feature branch:
   - result: `improved=10`, `risk=0`
   - artifact: `reports/manual-acceptance-real-calls-2026-03-17.md`
 
+Open control point after rollout:
+
+- verify live `callType` presence on new production `call_received` events
+- verify stable mapping path for employee lookup (`INCOMING -> destination/callee`, `OUTGOING -> caller`)
+- run:
+  - `npm run audit:call-meta -- --hours 24 --source tele2_poll_once`
+  - target: `with_call_type` is consistently non-zero on new events
+
 ## Completed workstream (Telegram callback polling via `getUpdates`)
 
 Baseline status:

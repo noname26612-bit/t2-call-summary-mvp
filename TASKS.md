@@ -195,3 +195,4 @@ Explicitly not in this change set:
 - [ ] Зафиксировать рабочую timeout-политику для длинных записей (`--timeout-ms 180000` validated) и при необходимости обновить default values
 - [ ] Повысить приоритет retention policy для исторических таблиц PostgreSQL
 - [ ] Подготовить интеграцию Lockbox для секретов (вместо env-only)
+- [ ] Production control point after feature release: проверить live coverage `callType/employeePhone` на новых `call_received` событиях (`npm run audit:call-meta -- --hours 24 --source tele2_poll_once`)

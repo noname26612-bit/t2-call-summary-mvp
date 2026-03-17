@@ -69,6 +69,7 @@ npm run dev
 - `npm run smoke:dialog-reconstruction`
 - `npm run smoke:employee-directory`
 - `npm run acceptance:real-calls`
+- `npm run audit:call-meta -- --hours 24 --source tele2_poll_once`
 - `npm run admin:employee-directory -- lookup --phone "+79991234567"`
 
 ## Что не входит в текущую архитектуру
