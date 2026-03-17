@@ -1,6 +1,8 @@
 const assert = require('node:assert/strict');
 const { createCallProcessor } = require('../services/callProcessor');
 const { formatTelegramCallSummary } = require('../services/telegramMessageFormatter');
+const { normalizePhone } = require('../utils/ignoredPhones');
+const { resolveEmployeePhoneFromCallMeta } = require('../utils/callParticipants');
 
 function createMockLogger() {
   return {
@@ -110,6 +112,24 @@ function buildScenarioAnalysis({ scenario, payload, employee }) {
       ? ['Низкая уверенность в распределении ролей по репликам.']
       : (noisyTranscript ? ['Транскрипт короткий и содержит шум.'] : [])
   };
+}
+
+function resolveExpectedSubscriberValue({ scenario, sentEmployee }) {
+  const employeeName = typeof sentEmployee?.employeeName === 'string'
+    ? sentEmployee.employeeName.trim()
+    : '';
+  if (employeeName) {
+    return employeeName;
+  }
+
+  const fallbackPhone = normalizePhone(resolveEmployeePhoneFromCallMeta({
+    callType: scenario.payload.callType,
+    callerNumber: scenario.payload.callerNumber,
+    calleeNumber: scenario.payload.calleeNumber,
+    destinationNumber: scenario.payload.destinationNumber
+  }));
+
+  return fallbackPhone || '—';
 }
 
 async function run() {
@@ -231,6 +251,20 @@ async function run() {
       expectNeutralTone: true
     },
     {
+      id: 'single_channel_known',
+      title: 'Single channel known employee',
+      payload: {
+        phone: '+79997770008',
+        callDateTime: '2026-03-17T10:35:00+03:00',
+        transcript: 'Клиент уточняет условия обслуживания и сроки обратной связи.',
+        callType: 'SINGLE_CHANNEL',
+        callerNumber: '+79997770008',
+        destinationNumber: '8 (495) 111-22-33',
+        calleeNumber: '+7 (495) 111-22-33'
+      },
+      expectEmployeeName: 'Милена'
+    },
+    {
       id: 'inactive_directory',
       title: 'Inactive directory number is ignored',
       payload: {
@@ -331,6 +365,23 @@ async function run() {
     });
 
     assert.ok(message.includes('Что хотели:'), `${scenario.title}: summary must contain wanted block`);
+
+    const expectedSubscriber = resolveExpectedSubscriberValue({
+      scenario,
+      sentEmployee: sent.employee || null
+    });
+    const expectedSubscriberLine = `Абонент: ${expectedSubscriber}`;
+    assert.ok(
+      message.includes(expectedSubscriberLine),
+      `${scenario.title}: subscriber line mismatch (expected "${expectedSubscriberLine}")`
+    );
+
+    if (scenario.expectEmployeeName) {
+      assert.ok(
+        !message.includes(`Абонент: ${scenario.expectEmployeeName},`),
+        `${scenario.title}: subscriber must contain only employee name without title`
+      );
+    }
 
     if (scenario.expectEmployeeName) {
       assert.ok(

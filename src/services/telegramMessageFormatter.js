@@ -564,6 +564,26 @@ function formatEmployeeSummaryLine(employee) {
   return employeeName;
 }
 
+function resolveSubscriberDisplay({
+  employee,
+  callType,
+  callerNumber,
+  calleeNumber,
+  destinationNumber
+} = {}) {
+  const employeeName = normalizeOptionalText(employee?.employeeName);
+  if (employeeName) {
+    return employeeName;
+  }
+
+  return normalizePhoneText(resolveSubscriberPhone({
+    callType,
+    callerNumber,
+    calleeNumber,
+    destinationNumber
+  }));
+}
+
 function formatTelegramCallSummary({
   phone,
   callDateTime,
@@ -578,12 +598,13 @@ function formatTelegramCallSummary({
   const normalizedAnalysis = isPlainObject(analysis) ? analysis : {};
   const primaryScenario = resolvePrimaryScenario(normalizedAnalysis);
   const callTypeText = resolveCallTypeLabel(callType);
-  const subscriberText = normalizePhoneText(resolveSubscriberPhone({
+  const subscriberText = resolveSubscriberDisplay({
+    employee,
     callType,
     callerNumber,
     calleeNumber,
     destinationNumber
-  })) || EMPTY_VALUE;
+  }) || EMPTY_VALUE;
   const phoneText = normalizePhoneText(phone) || EMPTY_VALUE;
   const dateTimeText = formatCallDateTime(callDateTime, timeZone);
   const companyName = normalizeOptionalText(normalizedAnalysis.companyName);
