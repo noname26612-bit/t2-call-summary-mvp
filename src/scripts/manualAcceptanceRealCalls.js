@@ -171,7 +171,7 @@ function scoreSummaryPair({ oldMessage, newMessage, analysis }) {
     'По разговору запрос:'
   ].filter((token) => newText.includes(token)).length;
   const lowConfidence = typeof analysis?.speakerRoleConfidence === 'number' && analysis.speakerRoleConfidence < 0.55;
-  const cautiousInLowConfidence = !lowConfidence || !newText.includes('Что хотели: Клиент:');
+  const cautiousInLowConfidence = !lowConfidence || !newText.includes('Итог по фактам: Клиент:');
 
   let verdict = 'same';
   if (newFeatures > oldFeatures) {

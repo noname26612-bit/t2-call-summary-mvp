@@ -190,7 +190,7 @@ const CASES = [
     }
   },
   {
-    title: 'Outgoing call type + subscriber line from callerNumber',
+    title: 'Outgoing call type is preserved',
     transcript: 'Перезвонили клиенту по уточнению доставки.',
     payload: {
       category: 'сервис',
@@ -207,12 +207,11 @@ const CASES = [
       category: 'Доставка',
       hasCompanyLine: false,
       hasOrderLine: false,
-      callType: 'Исходящий',
-      subscriber: '+74957654321'
+      callType: 'Исходящий'
     }
   },
   {
-    title: 'Tele2 SINGLE_CHANNEL maps to incoming and subscriber from destination',
+    title: 'Tele2 SINGLE_CHANNEL maps to incoming',
     transcript: 'Клиент позвонил на линию для уточнения ремонта.',
     payload: {
       category: 'сервис',
@@ -229,8 +228,7 @@ const CASES = [
       category: 'Ремонт',
       hasCompanyLine: false,
       hasOrderLine: false,
-      callType: 'Входящий',
-      subscriber: '+74951234567'
+      callType: 'Входящий'
     }
   },
   {
@@ -250,8 +248,21 @@ const CASES = [
       category: 'Другое',
       hasCompanyLine: false,
       hasOrderLine: false,
-      callType: '—',
-      subscriber: '—'
+      callType: '—'
+    }
+  },
+  {
+    title: 'Wanted summary with prefixed outcome keeps single final label',
+    transcript: 'Клиент не ответил, нужно повторить попытку.',
+    payload: {
+      category: 'прочее',
+      wantedSummary: 'Итог по фактам: Клиент не ответил, требуется повторный звонок.'
+    },
+    expected: {
+      category: 'Другое',
+      hasCompanyLine: false,
+      hasOrderLine: false,
+      wantedMustNotMatch: [/Итог по фактам:\s*Итог по фактам:/i]
     }
   }
 ];
@@ -259,12 +270,19 @@ const CASES = [
 function validateMessage({ title, message, normalized, expected }) {
   const errors = [];
   const expectedCallType = expected.callType || 'Входящий';
-  const expectedSubscriber = expected.subscriber || '+74951234567';
 
-  for (const prefix of ['Тип звонка:', 'Абонент:', 'Кто звонил:', 'Когда звонил:', 'Что хотели:', 'Категория:']) {
+  for (const prefix of ['Кто звонил:', 'Когда звонил:', 'Итог по фактам:', 'Категория:', 'Тип звонка:']) {
     if (!message.includes(prefix)) {
       errors.push(`${title}: missing required field "${prefix}"`);
     }
+  }
+
+  if (message.includes('Абонент:')) {
+    errors.push(`${title}: obsolete "Абонент" field should not be present`);
+  }
+
+  if (message.includes('Что хотели:')) {
+    errors.push(`${title}: obsolete "Что хотели" label should not be present`);
   }
 
   for (const snippet of FORBIDDEN_SNIPPETS) {
@@ -281,20 +299,16 @@ function validateMessage({ title, message, normalized, expected }) {
     errors.push(`${title}: expected call type "${expectedCallType}"`);
   }
 
-  if (!message.includes(`Абонент: ${expectedSubscriber}`)) {
-    errors.push(`${title}: expected subscriber "${expectedSubscriber}"`);
+  if (!/Когда звонил:[^\n]*\n\nИтог по фактам:/m.test(message)) {
+    errors.push(`${title}: expected empty line between "Когда звонил" and "Итог по фактам"`);
   }
 
-  if (!/Абонент:[^\n]*\n\nКто звонил:/m.test(message)) {
-    errors.push(`${title}: expected empty line between "Абонент" and "Кто звонил"`);
+  if (!/Итог по фактам:[\s\S]*\n\nКатегория:/m.test(message)) {
+    errors.push(`${title}: expected empty line between "Итог по фактам" and "Категория"`);
   }
 
-  if (!/Когда звонил:[^\n]*\n\nЧто хотели:/m.test(message)) {
-    errors.push(`${title}: expected empty line between "Когда звонил" and "Что хотели"`);
-  }
-
-  if (!/Что хотели:[\s\S]*\n\nКатегория:/m.test(message)) {
-    errors.push(`${title}: expected empty line between "Что хотели" and "Категория"`);
+  if (!/Тип звонка:[^\n]*$/.test(message)) {
+    errors.push(`${title}: "Тип звонка" must be the last line`);
   }
 
   const hasCompanyLine = message.includes('\nКомпания: ');
@@ -335,7 +349,7 @@ function validateMessage({ title, message, normalized, expected }) {
   if (Array.isArray(expected.wantedMustContain)) {
     for (const token of expected.wantedMustContain) {
       if (!message.includes(token)) {
-        errors.push(`${title}: "Что хотели" should contain "${token}"`);
+        errors.push(`${title}: "Итог по фактам" should contain "${token}"`);
       }
     }
   }
@@ -343,7 +357,7 @@ function validateMessage({ title, message, normalized, expected }) {
   if (Array.isArray(expected.wantedMustMatch)) {
     for (const pattern of expected.wantedMustMatch) {
       if (!pattern.test(message)) {
-        errors.push(`${title}: "Что хотели" should match ${pattern}`);
+        errors.push(`${title}: "Итог по фактам" should match ${pattern}`);
       }
     }
   }
@@ -351,7 +365,7 @@ function validateMessage({ title, message, normalized, expected }) {
   if (Array.isArray(expected.wantedMustNotMatch)) {
     for (const pattern of expected.wantedMustNotMatch) {
       if (pattern.test(message)) {
-        errors.push(`${title}: "Что хотели" should not include status-like phrase ${pattern}`);
+        errors.push(`${title}: "Итог по фактам" should not include status-like phrase ${pattern}`);
       }
     }
   }

@@ -75,6 +75,8 @@ const EMPTY_OPTIONAL_TEXT_TOKENS = new Set([
   'undefined'
 ]);
 
+const WANTED_SUMMARY_LEADING_PREFIX = /^(?:итог(?:\s+по\s+фактам)?|по\s+итог[ау]|итоговая\s+сводка|сводка\s+по\s+фактам|результат(?:\s+по\s+фактам)?|вывод)\s*[:\-–—]\s*/i;
+
 function isPlainObject(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
@@ -381,6 +383,23 @@ function stripStatusSentences(rawText, maxSentences = 2) {
     .trim();
 }
 
+function normalizeWantedSummaryForMessage(wantedText) {
+  let normalized = normalizeSingleLine(wantedText);
+  if (!normalized) {
+    return '';
+  }
+
+  while (normalized) {
+    const stripped = normalizeSingleLine(normalized.replace(WANTED_SUMMARY_LEADING_PREFIX, ''));
+    if (!stripped || stripped === normalized) {
+      break;
+    }
+    normalized = stripped;
+  }
+
+  return normalized;
+}
+
 function normalizeConfidenceScore(value) {
   if (typeof value === 'number' && Number.isFinite(value)) {
     if (value < 0) {
@@ -598,33 +617,41 @@ function formatTelegramCallSummary({
   const normalizedAnalysis = isPlainObject(analysis) ? analysis : {};
   const primaryScenario = resolvePrimaryScenario(normalizedAnalysis);
   const callTypeText = resolveCallTypeLabel(callType);
-  const subscriberText = resolveSubscriberDisplay({
-    employee,
-    callType,
-    callerNumber,
-    calleeNumber,
-    destinationNumber
-  }) || EMPTY_VALUE;
   const phoneText = normalizePhoneText(phone) || EMPTY_VALUE;
   const dateTimeText = formatCallDateTime(callDateTime, timeZone);
   const companyName = normalizeOptionalText(normalizedAnalysis.companyName);
   const orderNumber = normalizeOptionalText(normalizedAnalysis.orderNumber);
-  const wantedText = buildWantedText(normalizedAnalysis, { companyName, orderNumber });
+  const wantedText = normalizeWantedSummaryForMessage(
+    buildWantedText(normalizedAnalysis, { companyName, orderNumber })
+  ) || 'Запрос клиента зафиксирован.';
   const employeeSummaryLine = formatEmployeeSummaryLine(employee);
+  const hasAdditionalDetails = Boolean(companyName || orderNumber);
+  const hasBottomBlock = Boolean(employeeSummaryLine || callTypeText);
 
   const lines = [
-    `Тип звонка: ${callTypeText}`,
-    `Абонент: ${subscriberText}`,
-    '',
     `Кто звонил: ${phoneText}`,
     `Когда звонил: ${dateTimeText}`,
     '',
-    `Что хотели: ${wantedText}`,
+    `Итог по фактам: ${wantedText}`,
     '',
     `Категория: ${primaryScenario}`
   ];
 
-  if (employeeSummaryLine || companyName || orderNumber) {
+  if (hasAdditionalDetails || hasBottomBlock) {
+    lines.push('');
+  }
+
+  if (hasAdditionalDetails) {
+    if (companyName) {
+      lines.push(`Компания: ${companyName}`);
+    }
+
+    if (orderNumber) {
+      lines.push(`Номер заказа: ${orderNumber}`);
+    }
+  }
+
+  if (hasAdditionalDetails && hasBottomBlock) {
     lines.push('');
   }
 
@@ -632,17 +659,7 @@ function formatTelegramCallSummary({
     lines.push(`Сотрудник: ${employeeSummaryLine}`);
   }
 
-  if (employeeSummaryLine && (companyName || orderNumber)) {
-    lines.push('');
-  }
-
-  if (companyName) {
-    lines.push(`Компания: ${companyName}`);
-  }
-
-  if (orderNumber) {
-    lines.push(`Номер заказа: ${orderNumber}`);
-  }
+  lines.push(`Тип звонка: ${callTypeText}`);
 
   while (lines.length > 0 && lines[lines.length - 1] === '') {
     lines.pop();

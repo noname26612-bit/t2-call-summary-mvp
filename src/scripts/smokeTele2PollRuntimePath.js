@@ -215,13 +215,21 @@ async function run() {
     const incomingMessage = JSON.parse(requests[0].options.body).text;
     const outgoingMessage = JSON.parse(requests[1].options.body).text;
 
-    assert.ok(incomingMessage.includes('Тип звонка: Входящий'));
-    assert.ok(incomingMessage.includes('Абонент: +74951112233'));
     assert.ok(incomingMessage.includes('Кто звонил: +79991000001'));
+    assert.ok(incomingMessage.includes('Когда звонил:'));
+    assert.ok(incomingMessage.includes('Итог по фактам:'));
+    assert.ok(incomingMessage.includes('Категория:'));
+    assert.ok(incomingMessage.includes('Тип звонка: Входящий'));
+    assert.ok(!incomingMessage.includes('Абонент:'));
+    assert.ok(/Тип звонка: Входящий\s*$/.test(incomingMessage));
 
-    assert.ok(outgoingMessage.includes('Тип звонка: Исходящий'));
-    assert.ok(outgoingMessage.includes('Абонент: +74952223344'));
     assert.ok(outgoingMessage.includes('Кто звонил: +79992000002'));
+    assert.ok(outgoingMessage.includes('Когда звонил:'));
+    assert.ok(outgoingMessage.includes('Итог по фактам:'));
+    assert.ok(outgoingMessage.includes('Категория:'));
+    assert.ok(outgoingMessage.includes('Тип звонка: Исходящий'));
+    assert.ok(!outgoingMessage.includes('Абонент:'));
+    assert.ok(/Тип звонка: Исходящий\s*$/.test(outgoingMessage));
 
     assert.ok(!incomingMessage.includes('Следующий шаг:'));
     assert.ok(!outgoingMessage.includes('Следующий шаг:'));

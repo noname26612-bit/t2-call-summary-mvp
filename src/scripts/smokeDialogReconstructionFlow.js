@@ -1,8 +1,6 @@
 const assert = require('node:assert/strict');
 const { createCallProcessor } = require('../services/callProcessor');
 const { formatTelegramCallSummary } = require('../services/telegramMessageFormatter');
-const { normalizePhone } = require('../utils/ignoredPhones');
-const { resolveEmployeePhoneFromCallMeta } = require('../utils/callParticipants');
 
 function createMockLogger() {
   return {
@@ -112,24 +110,6 @@ function buildScenarioAnalysis({ scenario, payload, employee }) {
       ? ['Низкая уверенность в распределении ролей по репликам.']
       : (noisyTranscript ? ['Транскрипт короткий и содержит шум.'] : [])
   };
-}
-
-function resolveExpectedSubscriberValue({ scenario, sentEmployee }) {
-  const employeeName = typeof sentEmployee?.employeeName === 'string'
-    ? sentEmployee.employeeName.trim()
-    : '';
-  if (employeeName) {
-    return employeeName;
-  }
-
-  const fallbackPhone = normalizePhone(resolveEmployeePhoneFromCallMeta({
-    callType: scenario.payload.callType,
-    callerNumber: scenario.payload.callerNumber,
-    calleeNumber: scenario.payload.calleeNumber,
-    destinationNumber: scenario.payload.destinationNumber
-  }));
-
-  return fallbackPhone || '—';
 }
 
 async function run() {
@@ -364,34 +344,26 @@ async function run() {
       timeZone: 'Europe/Moscow'
     });
 
-    assert.ok(message.includes('Что хотели:'), `${scenario.title}: summary must contain wanted block`);
-
-    const expectedSubscriber = resolveExpectedSubscriberValue({
-      scenario,
-      sentEmployee: sent.employee || null
-    });
-    const expectedSubscriberLine = `Абонент: ${expectedSubscriber}`;
-    assert.ok(
-      message.includes(expectedSubscriberLine),
-      `${scenario.title}: subscriber line mismatch (expected "${expectedSubscriberLine}")`
-    );
-
-    if (scenario.expectEmployeeName) {
-      assert.ok(
-        !message.includes(`Абонент: ${scenario.expectEmployeeName},`),
-        `${scenario.title}: subscriber must contain only employee name without title`
-      );
-    }
+    assert.ok(message.includes('Итог по фактам:'), `${scenario.title}: summary must contain outcome block`);
+    assert.ok(!message.includes('Абонент:'), `${scenario.title}: obsolete subscriber line must be removed`);
 
     if (scenario.expectEmployeeName) {
       assert.ok(
         message.includes(`Сотрудник: ${scenario.expectEmployeeName}`),
         `${scenario.title}: summary should include employee line`
       );
+      assert.ok(
+        /\nСотрудник:[^\n]*\nТип звонка:[^\n]*$/.test(message),
+        `${scenario.title}: "Тип звонка" must go after "Сотрудник" at message bottom`
+      );
     } else {
       assert.ok(
         !message.includes('Сотрудник: Архивный сотрудник'),
         `${scenario.title}: inactive or unknown employee must not appear`
+      );
+      assert.ok(
+        /\nТип звонка:[^\n]*$/.test(message),
+        `${scenario.title}: "Тип звонка" must stay in message bottom`
       );
     }
 
@@ -437,7 +409,7 @@ async function run() {
         'Low-confidence scenario should include explicit uncertainty'
       );
       assert.ok(
-        !message.includes('Что хотели: Клиент:'),
+        !message.includes('Итог по фактам: Клиент:'),
         'Low-confidence scenario should avoid explicit role attribution in wanted block'
       );
     }
