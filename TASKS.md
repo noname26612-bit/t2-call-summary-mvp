@@ -17,6 +17,13 @@ Current status:
 - [x] Post-incident hardening rollout is completed as separate narrow pass
 - [x] Transcript storage + `.txt` transcript button pass is completed locally
 - [x] Telegram callback polling via `getUpdates` pass is completed
+- [x] Narrow Telegram format v2.2 pass is completed and production-verified (`2026-03-18`):
+  - [x] remove `Абонент: ...` from Telegram summary
+  - [x] replace `Что хотели:` with `Итог по фактам:`
+  - [x] normalize leading summary prefix to avoid duplicate `Итог по фактам: Итог по фактам: ...`
+  - [x] move `Тип звонка: ...` to message bottom (after `Сотрудник: ...` when employee is present)
+  - [x] run local smoke suite for updated formatter (`smoke:telegram-v2`, `smoke:tele2-poll-runtime-path`, `smoke:dialog-reconstruction`)
+  - [x] complete production rollout and post-deploy smoke (`POST /api/process-call`, `processed`, `telegram.status=sent`, live Telegram text verified from DB payload)
 - [x] Narrow production rollout completed for AI model switch in `ai-gateway` (`2026-03-18`):
   - [x] production `gateway.env` updated (`POLZA_MODEL=openai/gpt-5-mini`, `POLZA_TRANSCRIBE_MODEL=openai/gpt-4o-transcribe`)
   - [x] pre-change env backup created for rollback

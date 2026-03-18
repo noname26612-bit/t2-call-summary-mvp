@@ -37,6 +37,64 @@ These decisions are considered fixed unless explicitly changed:
 - host-level VM health check for gateway: `http://127.0.0.1:3001/healthz`
 - `ai-gateway` is not used as a separate public service
 
+## Completed narrow production rollout (`2026-03-18`): Telegram summary format v2.2
+
+Scope kept intentionally narrow:
+
+- update only main app Telegram summary formatting path
+- keep call type mapping logic unchanged (`SINGLE_CHANNEL/INCOMING/OUTGOING`)
+- remove `Абонент: ...` line from summary
+- replace visible summary label from `Что хотели:` to `Итог по фактам:`
+- normalize leading summary prefix to avoid duplicates (`Итог по фактам: Итог по фактам: ...`)
+- move `Тип звонка: ...` to the message bottom (after `Сотрудник: ...` when employee is present)
+- keep plain-text output contract (one call = one message, no HTML/Markdown)
+
+Rollout implementation details:
+
+- code merged/pushed to `main` commit:
+  - `98430d3` (`fix(telegram): switch summary format to outcome-first layout`)
+- production VM repo synced to `98430d3` (`/home/artem266/t2-call-summary-mvp`)
+- rebuilt only main app image on VM:
+  - `t2-call-summary:local-main-98430d3-20260318094702`
+- restarted only `t2-call-summary` container with existing runtime params preserved:
+  - `restart=unless-stopped`
+  - `network=t2-app-net`
+  - `port binding 3000:3000`
+  - existing env file `/opt/t2-call-summary/main.env`
+- `ai-gateway` container/image/env remained unchanged:
+  - `ai-gateway:local-main-083df41-20260318-092441`
+
+Post-deploy verification:
+
+- container status:
+  - `t2-call-summary` is `Up (healthy)` on new image `t2-call-summary:local-main-98430d3-20260318094702`
+  - `ai-gateway` is `Up (healthy)` unchanged
+- health endpoints:
+  - `GET http://127.0.0.1:3000/healthz` -> `{"status":"ok","database":"ok","timezone":"Europe/Moscow"}`
+  - `GET http://127.0.0.1:3001/healthz` -> `{"status":"ok"}`
+- running container code marker check:
+  - `/app/src/services/telegramMessageFormatter.js` contains `Итог по фактам:` label
+  - obsolete `Абонент:` label is absent in running container formatter source
+
+Post-deploy smoke (`POST /api/process-call`):
+
+- observed transient upstream latency:
+  - first smoke attempt returned `502` (`AI_GATEWAY_TIMEOUT after 20000 ms`)
+- repeated smoke succeeded:
+  - HTTP `200`
+  - response `status=processed`
+  - response `telegram.status=sent`
+
+Live Telegram payload verification from production DB (`telegram_deliveries.response_payload.result.text`):
+
+- verified no `Абонент:` line
+- verified `Итог по фактам:` label is present
+- verified no duplicated prefix `Итог по фактам: Итог по фактам:`
+- verified `Тип звонка:` is present as final line
+- verified employee-present case in production output:
+  - `Сотрудник: Милена, менеджер`
+  - next line: `Тип звонка: Исходящий`
+
 ## Completed narrow production rollout (`2026-03-18`): model switch (`ai-gateway` only)
 
 Scope kept intentionally narrow:
