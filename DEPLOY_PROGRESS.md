@@ -37,6 +37,79 @@ These decisions are considered fixed unless explicitly changed:
 - host-level VM health check for gateway: `http://127.0.0.1:3001/healthz`
 - `ai-gateway` is not used as a separate public service
 
+## Completed narrow production rollout (`2026-03-18`): Polza upstream failure stabilization (`POLZA_REQUEST_FAILED`)
+
+Scope kept intentionally narrow:
+
+- do not touch Telegram message formatting
+- do not touch main app business formatting flow
+- focus only on `ai-gateway -> Polza` timeout/retry behavior
+- keep production topology unchanged (`t2-call-summary` + `ai-gateway` on the same VM/network)
+
+Root-cause evidence collected before fix:
+
+- `POLZA_REQUEST_FAILED` was repeatedly observed around `~61s`
+- direct `ai-gateway /analyze` smoke showed repeatable `502` near `~61s`
+- runtime SDK defaults in container confirmed:
+  - `timeout=20000`
+  - `maxRetries=2`
+- this matches the observed `~61s` profile (`~20s * 3 attempts + overhead`)
+
+Minimal code + ops fix:
+
+- code commit on `main`:
+  - `0757f92` (`ai-gateway: make polza retry policy explicit`)
+- code changes:
+  - add explicit `POLZA_MAX_RETRIES` config in `ai-gateway`
+  - pass `maxRetries` to OpenAI SDK client instead of implicit SDK default
+  - expose `polzaTimeoutMs` / `polzaMaxRetries` in startup log for runtime auditability
+- production env changes (`/opt/t2-call-summary/gateway.env`):
+  - `POLZA_TIMEOUT_MS=65000`
+  - `POLZA_MAX_RETRIES=0`
+- pre-change backup created:
+  - `/opt/t2-call-summary/gateway.env.backup.20260318-104242.pre-polza-retry-fix`
+- only `ai-gateway` container restarted (main app unchanged)
+
+Production rollout details:
+
+- VM repo fast-forwarded to `0757f92`
+- rebuilt image:
+  - `ai-gateway:local-main-0757f92-20260318104301`
+- restarted container with existing runtime params preserved:
+  - `restart=unless-stopped`
+  - `network=t2-app-net`
+  - `port binding 3001:3001`
+  - env file `/opt/t2-call-summary/gateway.env`
+
+Post-deploy verification:
+
+- container health:
+  - `ai-gateway` -> `Up (healthy)`
+  - `t2-call-summary` -> `Up (healthy)` (unchanged)
+- health endpoints:
+  - `GET http://127.0.0.1:3001/healthz` -> `{"status":"ok"}`
+  - `GET http://127.0.0.1:3000/healthz` -> `{"status":"ok","database":"ok","timezone":"Europe/Moscow"}`
+- runtime env inside running `ai-gateway`:
+  - `POLZA_TIMEOUT_MS=65000`
+  - `POLZA_MAX_RETRIES=0`
+- startup log confirms active runtime policy:
+  - `polzaTimeoutMs=65000`
+  - `polzaMaxRetries=0`
+
+Post-deploy smoke (correlated by `x-request-id`):
+
+- `POST /api/process-call` (6 unique requests):
+  - all 6 returned HTTP `200`
+  - all 6 returned `status=processed`
+  - observed range: `~25.9s .. ~41.5s`
+- direct `POST /analyze` (4 unique requests):
+  - all 4 returned HTTP `200`
+  - observed range: `~22.6s .. ~36.9s`
+- log counters since `ai-gateway` restart window:
+  - main `AI_GATEWAY_TIMEOUT=0`
+  - main `AI_GATEWAY_UPSTREAM_ERROR=0`
+  - gateway `POLZA_REQUEST_FAILED=0`
+
 ## Completed narrow production rollout (`2026-03-18`): Telegram summary format v2.2
 
 Scope kept intentionally narrow:

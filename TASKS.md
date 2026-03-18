@@ -30,6 +30,15 @@ Current status:
   - [x] only `ai-gateway` container restarted
   - [x] startup log verified (`configured` and `upstream` model IDs)
   - [x] post-deploy smoke passed (`/transcribe` + `/analyze`, non-empty transcript/summary, model logs verified)
+- [x] Narrow production stabilization pass completed for intermittent `POLZA_REQUEST_FAILED` (`2026-03-18`):
+  - [x] root cause confirmed: implicit SDK retries (`maxRetries=2`) + `POLZA_TIMEOUT_MS=20000` produced ~61s failure profile
+  - [x] minimal code fix merged: explicit `POLZA_MAX_RETRIES` runtime config for `ai-gateway`
+  - [x] production `gateway.env` tuned (`POLZA_TIMEOUT_MS=65000`, `POLZA_MAX_RETRIES=0`) with pre-change backup
+  - [x] only `ai-gateway` container restarted on production VM
+  - [x] post-deploy correlated smoke passed:
+    - [x] `POST /api/process-call` 6/6 `processed`
+    - [x] direct `POST /analyze` 4/4 `200`
+    - [x] no `AI_GATEWAY_TIMEOUT` / `AI_GATEWAY_UPSTREAM_ERROR` / `POLZA_REQUEST_FAILED` in rollout log window
 
 ## Completed workstream (Dialog reconstruction + employee phone directory, `2026-03-17`)
 
