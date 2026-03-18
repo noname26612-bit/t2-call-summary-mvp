@@ -62,6 +62,7 @@ Canonical runtime names in `ai-gateway` code:
 - `POLZA_BASE_URL`
 - `POLZA_MODEL`
 - `POLZA_TIMEOUT_MS`
+- `POLZA_MAX_RETRIES`
 
 Production cutover is confirmed, and runtime naming cleanup is applied.
 
@@ -190,7 +191,7 @@ DB_SSL=false
 # Production container-to-container routing on the current VM network:
 AI_GATEWAY_URL=http://ai-gateway:3001
 AI_GATEWAY_SHARED_SECRET=<shared-secret>
-AI_GATEWAY_TIMEOUT_MS=20000
+AI_GATEWAY_TIMEOUT_MS=70000
 
 TELEGRAM_BOT_TOKEN=<telegram-bot-token>
 TELEGRAM_CHAT_ID=<telegram-chat-id>
@@ -207,7 +208,8 @@ AI_GATEWAY_SHARED_SECRET=<shared-secret>
 POLZA_API_KEY=<polza-api-key>
 POLZA_BASE_URL=https://polza.ai/api/v1
 POLZA_MODEL=<polza-model>
-POLZA_TIMEOUT_MS=20000
+POLZA_TIMEOUT_MS=65000
+POLZA_MAX_RETRIES=0
 EOF_GATEWAY
 ```
 

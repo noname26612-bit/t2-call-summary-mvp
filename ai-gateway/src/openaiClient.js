@@ -886,7 +886,8 @@ function createPolzaClient(config) {
   const client = new OpenAI({
     apiKey: config.apiKey.trim(),
     baseURL: isNonEmptyString(config.baseUrl) ? config.baseUrl.trim() : undefined,
-    timeout: config.timeoutMs
+    timeout: config.timeoutMs,
+    maxRetries: config.maxRetries
   });
 
   return {

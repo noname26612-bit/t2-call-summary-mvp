@@ -49,7 +49,7 @@ Current follow-ups:
 ## Runtime naming (canonical)
 
 - shared secret: `AI_GATEWAY_SHARED_SECRET`
-- provider vars: `POLZA_API_KEY`, `POLZA_BASE_URL`, `POLZA_MODEL`, `POLZA_TRANSCRIBE_MODEL`, `POLZA_TRANSCRIBE_MODEL_CANDIDATE`, `POLZA_TIMEOUT_MS`
+- provider vars: `POLZA_API_KEY`, `POLZA_BASE_URL`, `POLZA_MODEL`, `POLZA_TRANSCRIBE_MODEL`, `POLZA_TRANSCRIBE_MODEL_CANDIDATE`, `POLZA_TIMEOUT_MS`, `POLZA_MAX_RETRIES`
 - upload guard var: `TRANSCRIBE_FILE_MAX_BYTES` (default `20971520`)
 - legacy names `GATEWAY_SHARED_SECRET` and `OPENAI_*` are no longer used by `ai-gateway` runtime code
 
@@ -57,12 +57,13 @@ Current follow-ups:
 
 - Node.js 20+
 - shared secret between main app and gateway
-- provider credentials: `POLZA_API_KEY` (optional overrides: `POLZA_BASE_URL`, `POLZA_MODEL`, `POLZA_TRANSCRIBE_MODEL`, `POLZA_TRANSCRIBE_MODEL_CANDIDATE`, `POLZA_TIMEOUT_MS`)
+- provider credentials: `POLZA_API_KEY` (optional overrides: `POLZA_BASE_URL`, `POLZA_MODEL`, `POLZA_TRANSCRIBE_MODEL`, `POLZA_TRANSCRIBE_MODEL_CANDIDATE`, `POLZA_TIMEOUT_MS`, `POLZA_MAX_RETRIES`)
 
 ## Model defaults and compatibility
 
 - default text analysis model: `POLZA_MODEL=openai/gpt-5-mini`
 - default STT model: `POLZA_TRANSCRIBE_MODEL=openai/gpt-4o-transcribe`
+- default retry policy: `POLZA_MAX_RETRIES=0` (disable hidden automatic SDK retries)
 - compatibility mapping is centralized in `src/config.js`: `openai/gpt-5-mini -> gpt-5-mini` for analyze, `openai/gpt-4o-transcribe -> gpt-4o-transcribe` for transcribe
 - cheaper model testing is opt-in only via request override (`transcribeModel`) or script flags
 - do not do blind full switch to `openai/whisper-1` without validation on real recordings

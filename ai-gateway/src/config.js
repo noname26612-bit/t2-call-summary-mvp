@@ -4,6 +4,7 @@ const DEFAULT_POLZA_BASE_URL = 'https://polza.ai/api/v1';
 const DEFAULT_POLZA_MODEL = 'openai/gpt-5-mini';
 const DEFAULT_POLZA_TRANSCRIBE_MODEL = 'openai/gpt-4o-transcribe';
 const DEFAULT_POLZA_TIMEOUT_MS = 20000;
+const DEFAULT_POLZA_MAX_RETRIES = 0;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10000;
 const DEFAULT_BODY_LIMIT = '1mb';
 const DEFAULT_TRANSCRIBE_FILE_MAX_BYTES = 20 * 1024 * 1024;
@@ -62,6 +63,36 @@ function parsePositiveIntFromNames(canonicalName, fallbackNames = [], defaultVal
 
   for (const name of candidates) {
     const parsed = parsePositiveIntValue(process.env[name], name);
+    if (parsed !== null) {
+      return parsed;
+    }
+  }
+
+  return defaultValue;
+}
+
+function parseNonNegativeIntValue(rawValue, nameForError) {
+  if (rawValue === undefined || rawValue === null || String(rawValue).trim() === '') {
+    return null;
+  }
+
+  if (!/^[0-9]+$/.test(String(rawValue).trim())) {
+    throw new Error(`${nameForError} must be a non-negative integer`);
+  }
+
+  const parsed = Number.parseInt(String(rawValue).trim(), 10);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error(`${nameForError} must be a non-negative integer`);
+  }
+
+  return parsed;
+}
+
+function parseNonNegativeIntFromNames(canonicalName, fallbackNames = [], defaultValue) {
+  const candidates = [canonicalName, ...fallbackNames];
+
+  for (const name of candidates) {
+    const parsed = parseNonNegativeIntValue(process.env[name], name);
     if (parsed !== null) {
       return parsed;
     }
@@ -154,7 +185,8 @@ function loadConfig() {
       transcribeCandidateModel: resolveUpstreamModelId(configuredTranscribeCandidateModel, {
         preferBareOpenAI: true
       }),
-      timeoutMs: parsePositiveIntFromNames('POLZA_TIMEOUT_MS', [], DEFAULT_POLZA_TIMEOUT_MS)
+      timeoutMs: parsePositiveIntFromNames('POLZA_TIMEOUT_MS', [], DEFAULT_POLZA_TIMEOUT_MS),
+      maxRetries: parseNonNegativeIntFromNames('POLZA_MAX_RETRIES', [], DEFAULT_POLZA_MAX_RETRIES)
     }
   };
 }

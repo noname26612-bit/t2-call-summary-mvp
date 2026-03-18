@@ -323,7 +323,9 @@ function bootstrap() {
         : '',
       transcribeCandidateModelUpstream: isNonEmptyString(config.openai.transcribeCandidateModel)
         ? config.openai.transcribeCandidateModel
-        : ''
+        : '',
+      polzaTimeoutMs: config.openai.timeoutMs,
+      polzaMaxRetries: config.openai.maxRetries
     });
   });
 
