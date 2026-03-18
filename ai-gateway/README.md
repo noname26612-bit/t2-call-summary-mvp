@@ -59,9 +59,11 @@ Current follow-ups:
 - shared secret between main app and gateway
 - provider credentials: `POLZA_API_KEY` (optional overrides: `POLZA_BASE_URL`, `POLZA_MODEL`, `POLZA_TRANSCRIBE_MODEL`, `POLZA_TRANSCRIBE_MODEL_CANDIDATE`, `POLZA_TIMEOUT_MS`)
 
-## STT model safety defaults
+## Model defaults and compatibility
 
-- default STT model stays `openai/gpt-4o-mini-transcribe`
+- default text analysis model: `POLZA_MODEL=openai/gpt-5-mini`
+- default STT model: `POLZA_TRANSCRIBE_MODEL=openai/gpt-4o-transcribe`
+- compatibility mapping is centralized in `src/config.js`: `openai/gpt-5-mini -> gpt-5-mini` for analyze, `openai/gpt-4o-transcribe -> gpt-4o-transcribe` for transcribe
 - cheaper model testing is opt-in only via request override (`transcribeModel`) or script flags
 - do not do blind full switch to `openai/whisper-1` without validation on real recordings
 
@@ -150,7 +152,7 @@ curl -s -X POST http://localhost:3001/transcribe \
   -F "requestId=req-stt-1" \
   -F "fileName=sample.mp3" \
   -F "mimeType=audio/mpeg" \
-  -F "transcribeModel=openai/gpt-4o-mini-transcribe" \
+  -F "transcribeModel=openai/gpt-4o-transcribe" \
   -F "audio=@./sample.mp3;type=audio/mpeg"
 ```
 
@@ -168,7 +170,7 @@ Expected response shape:
 ```json
 {
   "transcript": "Здравствуйте, подскажите цену и срок поставки.",
-  "model": "openai/gpt-4o-mini-transcribe",
+  "model": "gpt-4o-transcribe",
   "audioBytes": 98304
 }
 ```

@@ -891,10 +891,10 @@ function createPolzaClient(config) {
 
   return {
     client,
-    analyzeModel: isNonEmptyString(config.model) ? config.model.trim() : 'gpt-4.1-mini',
+    analyzeModel: isNonEmptyString(config.model) ? config.model.trim() : 'gpt-5-mini',
     transcribeModel: isNonEmptyString(config.transcribeModel)
       ? config.transcribeModel.trim()
-      : 'openai/gpt-4o-mini-transcribe',
+      : 'openai/gpt-4o-transcribe',
     transcribeCandidateModel: isNonEmptyString(config.transcribeCandidateModel)
       ? config.transcribeCandidateModel.trim()
       : ''
@@ -1133,6 +1133,7 @@ function createOpenAIAnalyzer(config, logger) {
 
     logger.info('polza_analysis_success', {
       requestId: payload.requestId || '',
+      model: analyzeModel,
       category: normalized.category,
       priority: normalized.priority,
       tagsCount: normalized.tags.length

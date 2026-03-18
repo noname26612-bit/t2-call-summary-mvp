@@ -308,7 +308,22 @@ function bootstrap() {
       nodeEnv: config.nodeEnv,
       model: config.openai.model,
       transcribeModel: config.openai.transcribeModel,
-      transcribeCandidateModelConfigured: isNonEmptyString(config.openai.transcribeCandidateModel)
+      transcribeCandidateModelConfigured: isNonEmptyString(config.openai.transcribeCandidateModel),
+      analyzeModelConfigured: isNonEmptyString(config.openai.modelConfigured)
+        ? config.openai.modelConfigured
+        : config.openai.model,
+      analyzeModelUpstream: config.openai.model,
+      transcribeModelConfigured: isNonEmptyString(config.openai.transcribeModelConfigured)
+        ? config.openai.transcribeModelConfigured
+        : config.openai.transcribeModel,
+      transcribeModelUpstream: config.openai.transcribeModel,
+      transcribeCandidateModelConfiguredFromEnv: isNonEmptyString(config.openai.transcribeCandidateModelConfigured),
+      transcribeCandidateModelConfiguredValue: isNonEmptyString(config.openai.transcribeCandidateModelConfigured)
+        ? config.openai.transcribeCandidateModelConfigured
+        : '',
+      transcribeCandidateModelUpstream: isNonEmptyString(config.openai.transcribeCandidateModel)
+        ? config.openai.transcribeCandidateModel
+        : ''
     });
   });
 
