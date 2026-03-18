@@ -17,6 +17,12 @@ Current status:
 - [x] Post-incident hardening rollout is completed as separate narrow pass
 - [x] Transcript storage + `.txt` transcript button pass is completed locally
 - [x] Telegram callback polling via `getUpdates` pass is completed
+- [x] Narrow production rollout completed for AI model switch in `ai-gateway` (`2026-03-18`):
+  - [x] production `gateway.env` updated (`POLZA_MODEL=openai/gpt-5-mini`, `POLZA_TRANSCRIBE_MODEL=openai/gpt-4o-transcribe`)
+  - [x] pre-change env backup created for rollback
+  - [x] only `ai-gateway` container restarted
+  - [x] startup log verified (`configured` and `upstream` model IDs)
+  - [x] post-deploy smoke passed (`/transcribe` + `/analyze`, non-empty transcript/summary, model logs verified)
 
 ## Completed workstream (Dialog reconstruction + employee phone directory, `2026-03-17`)
 

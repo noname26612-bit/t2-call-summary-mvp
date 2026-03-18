@@ -37,6 +37,62 @@ These decisions are considered fixed unless explicitly changed:
 - host-level VM health check for gateway: `http://127.0.0.1:3001/healthz`
 - `ai-gateway` is not used as a separate public service
 
+## Completed narrow production rollout (`2026-03-18`): model switch (`ai-gateway` only)
+
+Scope kept intentionally narrow:
+
+- update production `ai-gateway` env only (`/opt/t2-call-summary/gateway.env`)
+- set target model IDs:
+  - `POLZA_MODEL=openai/gpt-5-mini`
+  - `POLZA_TRANSCRIBE_MODEL=openai/gpt-4o-transcribe`
+- restart only `ai-gateway` container
+- keep main app runtime, SQL schema, Telegram format, and polling flow unchanged
+
+Operational rollback safety:
+
+- pre-change env backup created on VM:
+  - `/opt/t2-call-summary/gateway.env.backup.20260318-092441.pre-model-switch`
+- previous production model values captured before update:
+  - `POLZA_MODEL=gpt-4.1-mini`
+  - `POLZA_TRANSCRIBE_MODEL=openai/gpt-4o-mini-transcribe`
+- previous running image kept locally on VM for fast rollback:
+  - `cr.yandex/crp7rtg14ln3sv80hbo8/ai-gateway:prod-v6-stt-compare-amd64`
+
+Rollout implementation details:
+
+- VM repo synced to merged `main` commit:
+  - `083df41` (`Configurable model upgrade for transcribe and analysis`)
+- `ai-gateway` image rebuilt on VM from that commit:
+  - `ai-gateway:local-main-083df41-20260318-092441`
+- only `ai-gateway` was recreated with the updated env file on existing network `t2-app-net`
+
+Post-deploy verification (host-level):
+
+- `GET http://127.0.0.1:3001/healthz` -> `{"status":"ok"}`
+- startup log confirms configured/upstream model mapping:
+  - `analyzeModelConfigured=openai/gpt-5-mini`
+  - `analyzeModelUpstream=gpt-5-mini`
+  - `transcribeModelConfigured=openai/gpt-4o-transcribe`
+  - `transcribeModelUpstream=gpt-4o-transcribe`
+
+Minimal smoke after restart:
+
+- `/transcribe` smoke:
+  - HTTP `200`
+  - non-empty transcript
+  - response `model=gpt-4o-transcribe`
+  - log `polza_transcription_success` with `model=gpt-4o-transcribe`
+- `/analyze` smoke:
+  - HTTP `200`
+  - non-empty `summary`
+  - core response structure preserved (`category/topic/summary/outcome/nextStep/priority/tags`)
+  - log `polza_analysis_success` with `model=gpt-5-mini`
+
+Transient provider error note:
+
+- no transient provider error was observed in the two post-deploy smoke requests
+- observed one long analyze latency during smoke (`~58s`) with successful HTTP `200` response
+
 ## Completed narrow pass (`2026-03-17`): dialog reconstruction + employee phone directory
 
 Implemented and verified in feature branch:
