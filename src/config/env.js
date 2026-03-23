@@ -10,6 +10,7 @@ const DEFAULT_DB_CONNECT_TIMEOUT_MS = 5000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10000;
 const DEFAULT_T2_TIMEOUT_MS = 10000;
 const DEFAULT_AI_GATEWAY_TIMEOUT_MS = 20000;
+const DEFAULT_AI_ANALYZE_MIN_TRANSCRIPT_CHARS = 16;
 const DEFAULT_TELEGRAM_UPDATES_POLL_TIMEOUT_SEC = 8;
 const DEFAULT_TELEGRAM_UPDATES_IDLE_DELAY_MS = 400;
 const DEFAULT_TELEGRAM_UPDATES_ERROR_DELAY_MS = 3000;
@@ -142,6 +143,12 @@ function loadConfig(options = {}) {
         : getOptionalString('AI_GATEWAY_SHARED_SECRET', ''),
       timeoutMs: parsePositiveInt('AI_GATEWAY_TIMEOUT_MS', DEFAULT_AI_GATEWAY_TIMEOUT_MS)
     },
+    costGuards: {
+      analyzeMinTranscriptChars: parsePositiveInt(
+        'AI_ANALYZE_MIN_TRANSCRIPT_CHARS',
+        DEFAULT_AI_ANALYZE_MIN_TRANSCRIPT_CHARS
+      )
+    },
     ingest: {
       sharedSecret: getOptionalString('INGEST_SHARED_SECRET', '')
     },
@@ -185,7 +192,8 @@ function loadConfig(options = {}) {
       adapter: {
         phoneFieldPath: getOptionalString('TELE2_PHONE_FIELD_PATH', ''),
         callDateTimeFieldPath: getOptionalString('TELE2_CALL_DATETIME_FIELD_PATH', ''),
-        transcriptFieldPath: getOptionalString('TELE2_TRANSCRIPT_FIELD_PATH', '')
+        transcriptFieldPath: getOptionalString('TELE2_TRANSCRIPT_FIELD_PATH', ''),
+        callIdFieldPath: getOptionalString('TELE2_CALL_ID_FIELD_PATH', '')
       }
     },
     database: buildDatabaseConfig()

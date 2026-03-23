@@ -61,6 +61,8 @@ Canonical runtime names in `ai-gateway` code:
 - `POLZA_API_KEY`
 - `POLZA_BASE_URL`
 - `POLZA_MODEL`
+- `POLZA_TRANSCRIPTION_MODEL` (legacy alias `POLZA_TRANSCRIBE_MODEL` is still supported)
+- `ALLOW_REQUEST_MODEL_OVERRIDES` (keep `false` in production)
 - `POLZA_TIMEOUT_MS`
 - `POLZA_MAX_RETRIES`
 
@@ -192,6 +194,7 @@ DB_SSL=false
 AI_GATEWAY_URL=http://ai-gateway:3001
 AI_GATEWAY_SHARED_SECRET=<shared-secret>
 AI_GATEWAY_TIMEOUT_MS=70000
+AI_ANALYZE_MIN_TRANSCRIPT_CHARS=16
 
 TELEGRAM_BOT_TOKEN=<telegram-bot-token>
 TELEGRAM_CHAT_ID=<telegram-chat-id>
@@ -208,6 +211,8 @@ AI_GATEWAY_SHARED_SECRET=<shared-secret>
 POLZA_API_KEY=<polza-api-key>
 POLZA_BASE_URL=https://polza.ai/api/v1
 POLZA_MODEL=<polza-model>
+POLZA_TRANSCRIPTION_MODEL=openai/gpt-4o-mini-transcribe
+ALLOW_REQUEST_MODEL_OVERRIDES=false
 POLZA_TIMEOUT_MS=65000
 POLZA_MAX_RETRIES=0
 EOF_GATEWAY
@@ -219,6 +224,31 @@ EOF_GATEWAY
 ### How to verify
 ```bash
 sudo ls -la /opt/t2-call-summary
+```
+
+### Safe env update for existing VM files (no duplicate keys)
+If `main.env` and `gateway.env` already exist and you only need to update cost-guard vars, use replace flow below (Linux VM safe):
+
+```bash
+# main app: low-signal threshold
+sudo sed -i '/^AI_ANALYZE_MIN_TRANSCRIPT_CHARS=/d' /opt/t2-call-summary/main.env
+sudo sh -c "printf '%s\n' 'AI_ANALYZE_MIN_TRANSCRIPT_CHARS=16' >> /opt/t2-call-summary/main.env"
+
+# ai-gateway: request-level override guard
+sudo sed -i '/^ALLOW_REQUEST_MODEL_OVERRIDES=/d' /opt/t2-call-summary/gateway.env
+sudo sh -c "printf '%s\n' 'ALLOW_REQUEST_MODEL_OVERRIDES=false' >> /opt/t2-call-summary/gateway.env"
+
+# ai-gateway: STT runtime model (canonical var)
+sudo sed -i '/^POLZA_TRANSCRIPTION_MODEL=/d;/^POLZA_TRANSCRIBE_MODEL=/d' /opt/t2-call-summary/gateway.env
+sudo sh -c "printf '%s\n' 'POLZA_TRANSCRIPTION_MODEL=openai/gpt-4o-mini-transcribe' >> /opt/t2-call-summary/gateway.env"
+```
+
+Quick verify:
+
+```bash
+grep -n '^AI_ANALYZE_MIN_TRANSCRIPT_CHARS=' /opt/t2-call-summary/main.env
+grep -n '^ALLOW_REQUEST_MODEL_OVERRIDES=' /opt/t2-call-summary/gateway.env
+grep -n '^POLZA_TRANSCRIPTION_MODEL=' /opt/t2-call-summary/gateway.env
 ```
 
 ### Important note

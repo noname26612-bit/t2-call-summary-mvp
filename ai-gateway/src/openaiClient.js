@@ -47,6 +47,8 @@ const MAX_TEXT_LENGTH = Object.freeze({
 });
 
 const MAX_TRANSCRIBE_AUDIO_BYTES = 20 * 1024 * 1024;
+const POLZA_PROVIDER = 'polza';
+const POLZA_TRANSCRIPTIONS_ENDPOINT = '/audio/transcriptions';
 
 const ANALYSIS_SCHEMA = {
   type: 'object',
@@ -514,7 +516,7 @@ function buildAiUsageEvent({
     callId: isNonEmptyString(payload?.callId) ? payload.callId.trim().slice(0, 256) : '',
     operation,
     model: isNonEmptyString(model) ? model.trim() : '',
-    provider: 'polza',
+    provider: POLZA_PROVIDER,
     promptTokens: normalizeTokenCount(promptTokens),
     completionTokens: normalizeTokenCount(completionTokens),
     totalTokens: resolveTotalTokens(
@@ -1060,16 +1062,18 @@ function createPolzaClient(config) {
     timeout: config.timeoutMs,
     maxRetries: config.maxRetries
   });
+  const resolvedTranscribeModel = isNonEmptyString(config.transcribeModel)
+    ? config.transcribeModel.trim()
+    : (isNonEmptyString(config.defaultTranscribeModel) ? config.defaultTranscribeModel.trim() : 'gpt-4o-transcribe');
 
   return {
     client,
     analyzeModel: isNonEmptyString(config.model) ? config.model.trim() : 'gpt-5-mini',
-    transcribeModel: isNonEmptyString(config.transcribeModel)
-      ? config.transcribeModel.trim()
-      : 'openai/gpt-4o-transcribe',
+    transcribeModel: resolvedTranscribeModel,
     transcribeCandidateModel: isNonEmptyString(config.transcribeCandidateModel)
       ? config.transcribeCandidateModel.trim()
       : '',
+    allowRequestModelOverrides: config?.allowRequestModelOverrides === true,
     pricing: {
       analyzeInputRubPer1kTokens: Number.isFinite(config?.pricing?.analyzeInputRubPer1kTokens)
         ? Number(config.pricing.analyzeInputRubPer1kTokens)
@@ -1251,17 +1255,51 @@ function buildUserPrompt(payload) {
 }
 
 function createOpenAIAnalyzer(config, logger) {
-  const { client, analyzeModel, pricing } = createPolzaClient(config);
+  const { client, analyzeModel, pricing, allowRequestModelOverrides } = createPolzaClient(config);
+
+  function resolveAnalyzeModel(payload) {
+    const requestedModel = isNonEmptyString(payload?.analyzeModel) ? payload.analyzeModel.trim() : '';
+    if (!requestedModel) {
+      return analyzeModel;
+    }
+
+    if (!allowRequestModelOverrides) {
+      logger.info('cost_guard_model_override_ignored', {
+        requestId: payload?.requestId || '',
+        callEventId: normalizeCallEventId(payload?.callEventId),
+        callId: isNonEmptyString(payload?.callId) ? payload.callId.trim().slice(0, 256) : '',
+        stage: 'analyze',
+        reason: 'request_model_override_blocked',
+        provider: POLZA_PROVIDER,
+        configuredModel: analyzeModel,
+        requestedModel
+      });
+      return analyzeModel;
+    }
+
+    logger.info('cost_guard_model_override_allowed', {
+      requestId: payload?.requestId || '',
+      callEventId: normalizeCallEventId(payload?.callEventId),
+      callId: isNonEmptyString(payload?.callId) ? payload.callId.trim().slice(0, 256) : '',
+      stage: 'analyze',
+      provider: POLZA_PROVIDER,
+      configuredModel: analyzeModel,
+      requestedModel
+    });
+
+    return requestedModel;
+  }
 
   return async function analyzeCall(payload) {
     const startedAt = Date.now();
+    const effectiveAnalyzeModel = resolveAnalyzeModel(payload);
     const transcriptCharsRaw = getTranscriptChars(payload?.transcript);
     const transcriptCharsSent = transcriptCharsRaw;
     let completion;
 
     try {
       completion = await client.chat.completions.create({
-        model: analyzeModel,
+        model: effectiveAnalyzeModel,
         temperature: 0,
         response_format: {
           type: 'json_schema',
@@ -1287,7 +1325,7 @@ function createOpenAIAnalyzer(config, logger) {
       const aiUsage = buildAiUsageEvent({
         payload,
         operation: 'analyze',
-        model: analyzeModel,
+        model: effectiveAnalyzeModel,
         transcriptCharsRaw,
         transcriptCharsSent,
         durationMs,
@@ -1316,7 +1354,7 @@ function createOpenAIAnalyzer(config, logger) {
       const aiUsage = buildAiUsageEvent({
         payload,
         operation: 'analyze',
-        model: analyzeModel,
+        model: effectiveAnalyzeModel,
         promptTokens: usage.promptTokens,
         completionTokens: usage.completionTokens,
         totalTokens: usage.totalTokens,
@@ -1343,7 +1381,7 @@ function createOpenAIAnalyzer(config, logger) {
       const aiUsage = buildAiUsageEvent({
         payload,
         operation: 'analyze',
-        model: analyzeModel,
+        model: effectiveAnalyzeModel,
         promptTokens: usage.promptTokens,
         completionTokens: usage.completionTokens,
         totalTokens: usage.totalTokens,
@@ -1370,7 +1408,7 @@ function createOpenAIAnalyzer(config, logger) {
     const aiUsage = buildAiUsageEvent({
       payload,
       operation: 'analyze',
-      model: analyzeModel,
+      model: effectiveAnalyzeModel,
       promptTokens: usage.promptTokens,
       completionTokens: usage.completionTokens,
       totalTokens: usage.totalTokens,
@@ -1386,7 +1424,7 @@ function createOpenAIAnalyzer(config, logger) {
     logger.info('polza_analysis_success', {
       requestId: payload.requestId || '',
       callEventId: normalizeCallEventId(payload?.callEventId),
-      model: analyzeModel,
+      model: effectiveAnalyzeModel,
       category: normalized.category,
       priority: normalized.priority,
       tagsCount: normalized.tags.length,
@@ -1405,13 +1443,43 @@ function createOpenAIAnalyzer(config, logger) {
 }
 
 function createOpenAITranscriber(config, logger) {
-  const { client, transcribeModel, transcribeCandidateModel } = createPolzaClient(config);
+  const {
+    client,
+    transcribeModel,
+    transcribeCandidateModel,
+    allowRequestModelOverrides
+  } = createPolzaClient(config);
 
-  function resolveTranscribeModel(requestedModelRaw) {
+  function resolveTranscribeModel(payload) {
+    const requestedModelRaw = payload?.transcribeModel;
     const requested = isNonEmptyString(requestedModelRaw) ? requestedModelRaw.trim() : '';
     if (!requested) {
       return transcribeModel;
     }
+
+    if (!allowRequestModelOverrides) {
+      logger.info('cost_guard_model_override_ignored', {
+        requestId: payload?.requestId || '',
+        callEventId: normalizeCallEventId(payload?.callEventId),
+        callId: isNonEmptyString(payload?.callId) ? payload.callId.trim().slice(0, 256) : '',
+        stage: 'transcribe',
+        reason: 'request_model_override_blocked',
+        provider: POLZA_PROVIDER,
+        configuredModel: transcribeModel,
+        requestedModel: requested
+      });
+      return transcribeModel;
+    }
+
+    logger.info('cost_guard_model_override_allowed', {
+      requestId: payload?.requestId || '',
+      callEventId: normalizeCallEventId(payload?.callEventId),
+      callId: isNonEmptyString(payload?.callId) ? payload.callId.trim().slice(0, 256) : '',
+      stage: 'transcribe',
+      provider: POLZA_PROVIDER,
+      configuredModel: transcribeModel,
+      requestedModel: requested
+    });
 
     if (requested.toLowerCase() === 'candidate') {
       if (!isNonEmptyString(transcribeCandidateModel)) {
@@ -1431,12 +1499,22 @@ function createOpenAITranscriber(config, logger) {
   return async function transcribeAudio(payload) {
     const startedAt = Date.now();
     const audioBuffer = resolveAudioBuffer(payload);
-    const effectiveModel = resolveTranscribeModel(payload?.transcribeModel);
+    const effectiveModel = resolveTranscribeModel(payload);
     const extension = resolveTranscriptionFileExtension({
       fileName: payload?.fileName || '',
       mimeType: payload?.mimeType || ''
     });
     const tempFilePath = writeAudioBufferToTempFile(audioBuffer, extension);
+
+    logger.info('polza_transcription_request', {
+      requestId: payload?.requestId || '',
+      callEventId: normalizeCallEventId(payload?.callEventId),
+      provider: POLZA_PROVIDER,
+      endpoint: POLZA_TRANSCRIPTIONS_ENDPOINT,
+      model: effectiveModel,
+      requestedModel: isNonEmptyString(payload?.transcribeModel) ? payload.transcribeModel.trim() : '',
+      audioBytes: audioBuffer.length
+    });
 
     let response;
     try {
@@ -1519,6 +1597,8 @@ function createOpenAITranscriber(config, logger) {
 
     logger.info('polza_transcription_success', {
       requestId: payload?.requestId || '',
+      provider: POLZA_PROVIDER,
+      endpoint: POLZA_TRANSCRIPTIONS_ENDPOINT,
       transcriptLength: transcript.length,
       model: effectiveModel,
       audioBytes: audioBuffer.length,

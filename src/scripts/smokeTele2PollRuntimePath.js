@@ -189,9 +189,11 @@ async function run() {
     assert.equal(incomingPayload.callType, 'SINGLE_CHANNEL');
     assert.equal(incomingPayload.callerNumber, '+7 999 100-00-01');
     assert.equal(incomingPayload.destinationNumber, '8 (495) 111-22-33');
+    assert.equal(incomingPayload.callId, 'incoming-001');
     assert.equal(outgoingPayload.callType, 'OUTGOING');
     assert.equal(outgoingPayload.callerNumber, '8 (495) 222-33-44');
     assert.equal(outgoingPayload.destinationNumber, '+7 999 200-00-02');
+    assert.equal(outgoingPayload.callId, 'outgoing-001');
 
     const incomingResult = await sendProcessCall({
       processUrl,

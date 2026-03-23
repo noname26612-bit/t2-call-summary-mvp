@@ -24,8 +24,8 @@ const DEFAULT_MIN_AUDIO_BYTES = 4096;
 const DEFAULT_TIMEZONE_OFFSET = '+03:00';
 const MIN_CONVERSATION_DURATION_SECONDS = 10;
 const PRE_TRANSCRIBE_SKIP_REASONS = Object.freeze({
-  DUPLICATE_EVENT: 'skipped_before_transcribe:duplicate_event',
-  DUPLICATE_EVENT_DRY_RUN: 'skipped_before_transcribe:duplicate_event_dry_run',
+  DUPLICATE_EVENT: 'skipped_before_transcribe:duplicate_call_skip',
+  DUPLICATE_EVENT_DRY_RUN: 'skipped_before_transcribe:duplicate_call_skip_dry_run',
   MISSING_RECORD_FILE_NAME: 'skipped_before_transcribe:missing_record_file_name',
   UNUSABLE_METADATA_MISSING_PHONE: 'skipped_before_transcribe:unusable_metadata_missing_phone',
   UNUSABLE_METADATA_MISSING_CALL_DATETIME: 'skipped_before_transcribe:unusable_metadata_missing_call_datetime',
@@ -450,10 +450,18 @@ function buildProcessCallPayload({
   callDateTime = '',
   transcript = ''
 } = {}) {
+  const callId = pickFirstNonEmptyString([
+    record?.callId,
+    record?.externalCallId,
+    record?.recordingId,
+    record?.recordFileName
+  ]);
+
   const payload = {
     phone: isNonEmptyString(phone) ? phone.trim() : '',
     callDateTime: isNonEmptyString(callDateTime) ? callDateTime.trim() : '',
-    transcript: isNonEmptyString(transcript) ? transcript.trim() : ''
+    transcript: isNonEmptyString(transcript) ? transcript.trim() : '',
+    ...(isNonEmptyString(callId) ? { callId } : {})
   };
 
   const optionalFields = {
@@ -1386,6 +1394,14 @@ async function processCandidate({
         requestId,
         dryRun: true
       });
+      logger.info('cost_guard_dedup_skip', {
+        requestId,
+        callId,
+        stage: 'before_transcribe',
+        reason: PRE_TRANSCRIBE_SKIP_REASONS.DUPLICATE_EVENT_DRY_RUN,
+        dedupStatus: existing.status,
+        requestedOverrideModel: isNonEmptyString(config.transcribeModel) ? config.transcribeModel : ''
+      });
       await appendAiUsageAuditSafely(pool, logger, {
         xRequestId: requestId,
         callId,
@@ -1408,6 +1424,14 @@ async function processCandidate({
         dedupStatus: lock.previousStatus,
         requestId,
         dryRun: false
+      });
+      logger.info('cost_guard_dedup_skip', {
+        requestId,
+        callId,
+        stage: 'before_transcribe',
+        reason: PRE_TRANSCRIBE_SKIP_REASONS.DUPLICATE_EVENT,
+        dedupStatus: lock.previousStatus,
+        requestedOverrideModel: isNonEmptyString(config.transcribeModel) ? config.transcribeModel : ''
       });
       await appendAiUsageAuditSafely(pool, logger, {
         xRequestId: requestId,

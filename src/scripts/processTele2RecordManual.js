@@ -569,6 +569,7 @@ async function runTranscriptionAttempt({
 async function sendProcessCall({
   processUrl,
   ingestSecret,
+  callId,
   phone,
   callDateTime,
   transcript,
@@ -586,6 +587,7 @@ async function sendProcessCall({
     method: 'POST',
     headers,
     body: JSON.stringify({
+      ...(isNonEmptyString(callId) ? { callId: callId.trim() } : {}),
       phone,
       callDateTime,
       transcript
@@ -732,6 +734,7 @@ async function main() {
   const processCallResult = await sendProcessCall({
     processUrl: options.processUrl,
     ingestSecret: options.ingestSecret,
+    callId: options.recordFileName,
     phone,
     callDateTime,
     transcript,

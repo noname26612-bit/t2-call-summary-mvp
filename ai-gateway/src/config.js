@@ -5,6 +5,7 @@ const DEFAULT_POLZA_MODEL = 'openai/gpt-5-mini';
 const DEFAULT_POLZA_TRANSCRIBE_MODEL = 'openai/gpt-4o-transcribe';
 const DEFAULT_POLZA_TIMEOUT_MS = 20000;
 const DEFAULT_POLZA_MAX_RETRIES = 0;
+const DEFAULT_ALLOW_REQUEST_MODEL_OVERRIDES = false;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10000;
 const DEFAULT_BODY_LIMIT = '1mb';
 const DEFAULT_TRANSCRIBE_FILE_MAX_BYTES = 20 * 1024 * 1024;
@@ -132,6 +133,36 @@ function parseNonNegativeFloatFromNames(canonicalName, fallbackNames = [], defau
   return defaultValue;
 }
 
+function parseBooleanValue(rawValue, nameForError) {
+  if (rawValue === undefined || rawValue === null || String(rawValue).trim() === '') {
+    return null;
+  }
+
+  const normalized = String(rawValue).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+
+  if (['0', 'false', 'no', 'off'].includes(normalized)) {
+    return false;
+  }
+
+  throw new Error(`${nameForError} must be a boolean (true/false)`);
+}
+
+function parseBooleanFromNames(canonicalName, fallbackNames = [], defaultValue) {
+  const candidates = [canonicalName, ...fallbackNames];
+
+  for (const name of candidates) {
+    const parsed = parseBooleanValue(process.env[name], name);
+    if (parsed !== null) {
+      return parsed;
+    }
+  }
+
+  return defaultValue;
+}
+
 function normalizeModelId(value) {
   return isNonEmptyString(value) ? value.trim() : '';
 }
@@ -185,13 +216,16 @@ function resolveUpstreamModelId(modelId, { preferBareOpenAI = false, preferPrefi
 function loadConfig() {
   const configuredAnalyzeModel = getOptionalStringFromNames(['POLZA_MODEL'], DEFAULT_POLZA_MODEL);
   const configuredTranscribeModel = getOptionalStringFromNames(
-    ['POLZA_TRANSCRIBE_MODEL'],
+    ['POLZA_TRANSCRIPTION_MODEL', 'POLZA_TRANSCRIBE_MODEL'],
     DEFAULT_POLZA_TRANSCRIBE_MODEL
   );
   const configuredTranscribeCandidateModel = getOptionalStringFromNames(
     ['POLZA_TRANSCRIBE_MODEL_CANDIDATE'],
     ''
   );
+  const defaultTranscribeModel = resolveUpstreamModelId(DEFAULT_POLZA_TRANSCRIBE_MODEL, {
+    preferBareOpenAI: true
+  });
 
   return {
     nodeEnv: getOptionalStringFromNames(['NODE_ENV'], 'development'),
@@ -212,10 +246,16 @@ function loadConfig() {
       model: resolveUpstreamModelId(configuredAnalyzeModel, { preferBareOpenAI: true }),
       transcribeModelConfigured: configuredTranscribeModel,
       transcribeModel: resolveUpstreamModelId(configuredTranscribeModel, { preferBareOpenAI: true }),
+      defaultTranscribeModel,
       transcribeCandidateModelConfigured: configuredTranscribeCandidateModel,
       transcribeCandidateModel: resolveUpstreamModelId(configuredTranscribeCandidateModel, {
         preferBareOpenAI: true
       }),
+      allowRequestModelOverrides: parseBooleanFromNames(
+        'ALLOW_REQUEST_MODEL_OVERRIDES',
+        [],
+        DEFAULT_ALLOW_REQUEST_MODEL_OVERRIDES
+      ),
       timeoutMs: parsePositiveIntFromNames('POLZA_TIMEOUT_MS', [], DEFAULT_POLZA_TIMEOUT_MS),
       maxRetries: parseNonNegativeIntFromNames('POLZA_MAX_RETRIES', [], DEFAULT_POLZA_MAX_RETRIES),
       pricing: {

@@ -149,6 +149,7 @@ function createApp({ config, logger, analyzeCall, transcribeAudio }) {
         requestId: normalizeOptionalString(payload.requestId) || req.requestId,
         callEventId: payload.callEventId,
         callId: normalizeOptionalString(payload.callId),
+        analyzeModel: normalizeOptionalString(payload.analyzeModel) || normalizeOptionalString(payload.model),
         phone: normalizeOptionalString(payload.phone),
         callDateTime: normalizeOptionalString(payload.callDateTime),
         transcript: payload.transcript.trim()
@@ -314,6 +315,8 @@ function bootstrap() {
     logger.info('server_started', {
       port: config.port,
       nodeEnv: config.nodeEnv,
+      provider: 'polza',
+      transcribeEndpoint: '/audio/transcriptions',
       model: config.openai.model,
       transcribeModel: config.openai.transcribeModel,
       transcribeCandidateModelConfigured: isNonEmptyString(config.openai.transcribeCandidateModel),
@@ -332,6 +335,7 @@ function bootstrap() {
       transcribeCandidateModelUpstream: isNonEmptyString(config.openai.transcribeCandidateModel)
         ? config.openai.transcribeCandidateModel
         : '',
+      allowRequestModelOverrides: config.openai.allowRequestModelOverrides === true,
       polzaTimeoutMs: config.openai.timeoutMs,
       polzaMaxRetries: config.openai.maxRetries,
       analyzeInputRubPer1kTokens: Number.isFinite(config.openai?.pricing?.analyzeInputRubPer1kTokens)

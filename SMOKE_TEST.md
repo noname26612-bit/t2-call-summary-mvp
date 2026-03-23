@@ -64,7 +64,8 @@ cd /Users/nonamenoname/Documents/Транскрибация/t2-call-summary-mvp
 Canonical runtime names in `ai-gateway` code:
 
 - `AI_GATEWAY_SHARED_SECRET`
-- `POLZA_API_KEY`, `POLZA_BASE_URL`, `POLZA_MODEL`, `POLZA_TIMEOUT_MS`
+- `POLZA_API_KEY`, `POLZA_BASE_URL`, `POLZA_MODEL`, `POLZA_TRANSCRIPTION_MODEL` (legacy alias `POLZA_TRANSCRIBE_MODEL` is still supported), `POLZA_TIMEOUT_MS`
+- `ALLOW_REQUEST_MODEL_OVERRIDES` (production default: `false`)
 
 ## Step 1. Install dependencies and prepare env files
 
@@ -111,6 +112,7 @@ ls -la .env ai-gateway/.env
 Main app `.env`:
 - `AI_GATEWAY_URL=http://127.0.0.1:3001`
 - `AI_GATEWAY_SHARED_SECRET=<same_shared_secret_as_gateway>`
+- `AI_ANALYZE_MIN_TRANSCRIPT_CHARS=16` (cost guard for low-signal transcripts)
 - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
 - `DB_*` или `DATABASE_URL`
 
@@ -120,6 +122,8 @@ Gateway `ai-gateway/.env`:
 - `POLZA_API_KEY=<polza-api-key>`
 - `POLZA_BASE_URL=https://polza.ai/api/v1` (или ваш runtime URL)
 - `POLZA_MODEL=<polza-model>`
+- `POLZA_TRANSCRIPTION_MODEL=openai/gpt-4o-mini-transcribe`
+- `ALLOW_REQUEST_MODEL_OVERRIDES=false`
 - `POLZA_TIMEOUT_MS=20000`
 
 ### Expected result

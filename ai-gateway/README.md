@@ -43,13 +43,14 @@ Current follow-ups:
 ## Endpoints
 
 - `GET /healthz` -> `{ "status": "ok" }`
-- `POST /analyze` -> возвращает структурированный анализ
-- `POST /transcribe` -> возвращает транскрипт аудио через Polza (preferred: `multipart/form-data` upload field `audio`, optional `transcribeModel` override)
+- `POST /analyze` -> возвращает структурированный анализ (optional request override via `analyzeModel` or legacy `model`, only when `ALLOW_REQUEST_MODEL_OVERRIDES=true`)
+- `POST /transcribe` -> возвращает транскрипт аудио через Polza (preferred: `multipart/form-data` upload field `audio`, optional `transcribeModel` override only when `ALLOW_REQUEST_MODEL_OVERRIDES=true`)
 
 ## Runtime naming (canonical)
 
 - shared secret: `AI_GATEWAY_SHARED_SECRET`
-- provider vars: `POLZA_API_KEY`, `POLZA_BASE_URL`, `POLZA_MODEL`, `POLZA_TRANSCRIBE_MODEL`, `POLZA_TRANSCRIBE_MODEL_CANDIDATE`, `POLZA_TIMEOUT_MS`, `POLZA_MAX_RETRIES`
+- provider vars: `POLZA_API_KEY`, `POLZA_BASE_URL`, `POLZA_MODEL`, `POLZA_TRANSCRIPTION_MODEL`, `POLZA_TRANSCRIBE_MODEL_CANDIDATE`, `POLZA_TIMEOUT_MS`, `POLZA_MAX_RETRIES`, `ALLOW_REQUEST_MODEL_OVERRIDES`
+- legacy-compatible alias for STT model is still supported: `POLZA_TRANSCRIBE_MODEL`
 - upload guard var: `TRANSCRIBE_FILE_MAX_BYTES` (default `20971520`)
 - legacy names `GATEWAY_SHARED_SECRET` and `OPENAI_*` are no longer used by `ai-gateway` runtime code
 
@@ -57,16 +58,25 @@ Current follow-ups:
 
 - Node.js 20+
 - shared secret between main app and gateway
-- provider credentials: `POLZA_API_KEY` (optional overrides: `POLZA_BASE_URL`, `POLZA_MODEL`, `POLZA_TRANSCRIBE_MODEL`, `POLZA_TRANSCRIBE_MODEL_CANDIDATE`, `POLZA_TIMEOUT_MS`, `POLZA_MAX_RETRIES`)
+- provider credentials: `POLZA_API_KEY` (optional overrides: `POLZA_BASE_URL`, `POLZA_MODEL`, `POLZA_TRANSCRIPTION_MODEL`, `POLZA_TRANSCRIBE_MODEL`, `POLZA_TRANSCRIBE_MODEL_CANDIDATE`, `POLZA_TIMEOUT_MS`, `POLZA_MAX_RETRIES`, `ALLOW_REQUEST_MODEL_OVERRIDES`)
 
 ## Model defaults and compatibility
 
 - default text analysis model: `POLZA_MODEL=openai/gpt-5-mini`
-- default STT model: `POLZA_TRANSCRIBE_MODEL=openai/gpt-4o-transcribe`
+- recommended STT model env: `POLZA_TRANSCRIPTION_MODEL=openai/gpt-4o-mini-transcribe`
+- safe fallback when STT env is not set: `openai/gpt-4o-transcribe`
 - default retry policy: `POLZA_MAX_RETRIES=0` (disable hidden automatic SDK retries)
-- compatibility mapping is centralized in `src/config.js`: `openai/gpt-5-mini -> gpt-5-mini` for analyze, `openai/gpt-4o-transcribe -> gpt-4o-transcribe` for transcribe
+- request-level model overrides are blocked by default: `ALLOW_REQUEST_MODEL_OVERRIDES=false`
+- set `ALLOW_REQUEST_MODEL_OVERRIDES=true` only for controlled debug/experiment windows
+- compatibility mapping is centralized in `src/config.js`: `openai/gpt-5-mini -> gpt-5-mini` for analyze, `openai/gpt-4o-mini-transcribe -> gpt-4o-mini-transcribe` (and legacy `openai/gpt-4o-transcribe -> gpt-4o-transcribe`) for transcribe
 - cheaper model testing is opt-in only via request override (`transcribeModel`) or script flags
 - do not do blind full switch to `openai/whisper-1` without validation on real recordings
+
+## Quick rollback / switch
+
+- rollback to previous model: set `POLZA_TRANSCRIPTION_MODEL=openai/gpt-4o-transcribe` and restart `ai-gateway`
+- switch to whisper experiment: set `POLZA_TRANSCRIPTION_MODEL=openai/whisper-1` and restart `ai-gateway`
+- for backward compatibility you can set legacy alias `POLZA_TRANSCRIBE_MODEL` with the same values
 
 ## Quick local start
 
@@ -153,7 +163,7 @@ curl -s -X POST http://localhost:3001/transcribe \
   -F "requestId=req-stt-1" \
   -F "fileName=sample.mp3" \
   -F "mimeType=audio/mpeg" \
-  -F "transcribeModel=openai/gpt-4o-transcribe" \
+  -F "transcribeModel=openai/gpt-4o-mini-transcribe" \
   -F "audio=@./sample.mp3;type=audio/mpeg"
 ```
 
@@ -171,7 +181,7 @@ Expected response shape:
 ```json
 {
   "transcript": "Здравствуйте, подскажите цену и срок поставки.",
-  "model": "gpt-4o-transcribe",
+  "model": "gpt-4o-mini-transcribe",
   "audioBytes": 98304
 }
 ```

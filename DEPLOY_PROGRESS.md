@@ -2,6 +2,58 @@
 
 Operational progress log for post-baseline work after the successful Polza production cutover.
 
+## Completed production rollout (`2026-03-23`): cost-guards micro-pass + runtime redeploy
+
+Scope (narrow, no topology change):
+
+- apply safe env replace on VM for:
+  - `AI_ANALYZE_MIN_TRANSCRIPT_CHARS=16` (`/opt/t2-call-summary/main.env`)
+  - `ALLOW_REQUEST_MODEL_OVERRIDES=false` (`/opt/t2-call-summary/gateway.env`)
+  - `POLZA_TRANSCRIPTION_MODEL=openai/gpt-4o-mini-transcribe` (`/opt/t2-call-summary/gateway.env`)
+- rebuild and redeploy only:
+  - `t2-call-summary`
+  - `ai-gateway`
+- keep production topology unchanged (`t2-app-net`, same VM, same ports)
+
+Executed on production VM:
+
+- access path: `artem266@93.77.179.73`
+- previous runtime images captured for rollback:
+  - app: `t2-call-summary:local-main-20260323T111219Z`
+  - gateway: `ai-gateway:local-main-20260323T121453Z-costrub`
+  - rollback metadata file: `/tmp/pre-cost-guards-rollout-20260323143402.txt`
+- new runtime images built and deployed:
+  - `t2-call-summary:local-cost-guards-20260323143402`
+  - `ai-gateway:local-cost-guards-20260323143402`
+
+Post-deploy startup evidence:
+
+- `ai-gateway` startup log confirms:
+  - `transcribeModelUpstream=gpt-4o-mini-transcribe`
+  - `allowRequestModelOverrides=false`
+  - `provider=polza`
+- main app startup log confirms:
+  - `analyzeMinTranscriptChars=16`
+- health checks:
+  - `GET http://127.0.0.1:3000/healthz` -> `{"status":"ok","database":"ok","timezone":"Europe/Moscow"}`
+  - `GET http://127.0.0.1:3001/healthz` -> `{"status":"ok"}`
+
+Production smoke (passed, `2026-03-23`):
+
+1. meaningful short transcript:
+   - `/api/process-call` -> `status=processed` (not low-signal skipped)
+2. low-signal transcript (`тишина`):
+   - `/api/process-call` -> `status=ignored`, `reason=skipped_before_analyze:low_signal_transcript_skip`
+3. `/analyze` request-level override with `ALLOW_REQUEST_MODEL_OVERRIDES=false`:
+   - `cost_guard_model_override_ignored` found in `ai-gateway` logs
+4. duplicate by same `callId`:
+   - first pass `processed`, second pass `duplicate`
+   - reason/log confirmed: `skipped_before_analyze:duplicate_call_skip` + `cost_guard_dedup_skip`
+
+Operator note:
+
+- `/api/process-call` production smoke requires `x-ingest-secret` header (ingest auth enabled in runtime).
+
 ## 2026-03-23 — Cost reduction wave #1 completed
 
 Этап `cost reduction wave #1` закрыт.

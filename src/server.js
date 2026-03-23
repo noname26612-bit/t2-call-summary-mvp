@@ -474,7 +474,8 @@ async function bootstrap() {
     storage,
     analyzeCall,
     sendTelegramMessage,
-    logger: logger.child({ component: 'call_processor' })
+    logger: logger.child({ component: 'call_processor' }),
+    analyzeMinTranscriptChars: config.costGuards.analyzeMinTranscriptChars
   });
 
   const telegramUpdatePolling = createTelegramUpdatePollingService({
@@ -507,7 +508,8 @@ async function bootstrap() {
     logger.info('server_started', {
       port: config.port,
       timezone: config.appTimezone,
-      nodeEnv: config.nodeEnv
+      nodeEnv: config.nodeEnv,
+      analyzeMinTranscriptChars: config.costGuards.analyzeMinTranscriptChars
     });
 
     const pollingStart = telegramUpdatePolling.start();

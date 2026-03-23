@@ -35,8 +35,14 @@ function buildDedupKey({ phone, callDateTime, transcriptHash }) {
   return hashSha256(`${normalizedPhone}|${normalizedCallDateTime}|${normalizedTranscriptHash}`);
 }
 
+function buildCallIdDedupKey(callId) {
+  const normalizedCallId = typeof callId === 'string' ? callId.trim() : '';
+  return hashSha256(`call_id|${normalizedCallId}`);
+}
+
 module.exports = {
   buildTranscriptHash,
   buildDedupKey,
+  buildCallIdDedupKey,
   normalizeCallDateTimeForKey
 };

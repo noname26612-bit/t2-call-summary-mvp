@@ -39,6 +39,24 @@ Current status:
     - [x] `POST /api/process-call` 6/6 `processed`
     - [x] direct `POST /analyze` 4/4 `200`
     - [x] no `AI_GATEWAY_TIMEOUT` / `AI_GATEWAY_UPSTREAM_ERROR` / `POLZA_REQUEST_FAILED` in rollout log window
+- [x] Cost-guards micro-pass production rollout completed (`2026-03-23`):
+  - [x] env safe-replace applied on VM (no duplicate keys):
+    - [x] `AI_ANALYZE_MIN_TRANSCRIPT_CHARS=16` in `/opt/t2-call-summary/main.env`
+    - [x] `ALLOW_REQUEST_MODEL_OVERRIDES=false` in `/opt/t2-call-summary/gateway.env`
+    - [x] `POLZA_TRANSCRIPTION_MODEL=openai/gpt-4o-mini-transcribe` in `/opt/t2-call-summary/gateway.env`
+  - [x] old runtime images captured for rollback (`/tmp/pre-cost-guards-rollout-20260323143402.txt`)
+  - [x] redeployed containers with new local images:
+    - [x] `t2-call-summary:local-cost-guards-20260323143402`
+    - [x] `ai-gateway:local-cost-guards-20260323143402`
+  - [x] post-deploy startup logs verified:
+    - [x] gateway: `transcribeModelUpstream=gpt-4o-mini-transcribe`
+    - [x] gateway: `allowRequestModelOverrides=false`
+    - [x] main app: `analyzeMinTranscriptChars=16`
+  - [x] post-deploy smoke passed:
+    - [x] meaningful short call is not low-signal skipped
+    - [x] low-signal transcript is skipped before analyze
+    - [x] `/analyze` override ignored log present when overrides are disabled
+    - [x] duplicate `callId` second pass returns `duplicate` and does not trigger re-analyze
 
 ## Completed workstream (Self-hosted PostgreSQL cutover, `2026-03-23`)
 

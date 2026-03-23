@@ -1,9 +1,11 @@
 const { normalizePhone } = require('../utils/ignoredPhones');
-const { buildTranscriptHash, buildDedupKey } = require('../utils/dedup');
+const { buildTranscriptHash, buildDedupKey, buildCallIdDedupKey } = require('../utils/dedup');
 const {
   normalizeCallType,
   resolveEmployeePhoneFromCallMeta
 } = require('../utils/callParticipants');
+
+const DEFAULT_ANALYZE_MIN_TRANSCRIPT_CHARS = 16;
 
 function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim() !== '';
@@ -106,12 +108,9 @@ function sanitizeErrorForAudit(error) {
 
 const ANALYZE_SKIP_REASONS = Object.freeze({
   INTERNAL_OR_IGNORED_PHONE: 'skipped_before_analyze:internal_or_ignored_phone',
-  DUPLICATE_OR_ALREADY_PROCESSED: 'skipped_before_analyze:duplicate_or_already_processed',
-  EMPTY_TRANSCRIPT: 'skipped_before_analyze:empty_transcript',
-  NO_SPEECH_OR_NOISE: 'skipped_before_analyze:no_speech_or_noise',
-  SERVICE_PHRASE_ONLY: 'skipped_before_analyze:service_phrase_only',
-  LOW_INFORMATIVE_CONTENT: 'skipped_before_analyze:low_informative_content',
-  LOW_TRANSCRIPT_QUALITY: 'skipped_before_analyze:low_transcript_quality'
+  DUPLICATE_CALL_SKIP: 'skipped_before_analyze:duplicate_call_skip',
+  EMPTY_TRANSCRIPT_SKIP: 'skipped_before_analyze:empty_transcript_skip',
+  LOW_SIGNAL_TRANSCRIPT_SKIP: 'skipped_before_analyze:low_signal_transcript_skip'
 });
 
 const LOW_SIGNAL_WORDS = new Set([
@@ -212,14 +211,36 @@ function hasBusinessSignal(words) {
   return words.some((word) => BUSINESS_WORD_PREFIXES.some((prefix) => word.startsWith(prefix)));
 }
 
-function evaluateAnalyzeSkipGate(transcript) {
+function normalizeAnalyzeMinTranscriptChars(value) {
+  if (Number.isSafeInteger(value) && value > 0) {
+    return value;
+  }
+
+  return DEFAULT_ANALYZE_MIN_TRANSCRIPT_CHARS;
+}
+
+function evaluateAnalyzeSkipGate(transcript, options = {}) {
+  const minTranscriptChars = normalizeAnalyzeMinTranscriptChars(options.minTranscriptChars);
   const normalized = normalizeTranscriptTextForGate(transcript);
   if (!normalized) {
     return {
       shouldSkip: true,
-      reason: ANALYZE_SKIP_REASONS.EMPTY_TRANSCRIPT,
+      reason: ANALYZE_SKIP_REASONS.EMPTY_TRANSCRIPT_SKIP,
       details: {
-        transcriptLength: 0
+        transcriptLength: 0,
+        minTranscriptChars
+      }
+    };
+  }
+
+  if (normalized.length < minTranscriptChars) {
+    return {
+      shouldSkip: true,
+      reason: ANALYZE_SKIP_REASONS.LOW_SIGNAL_TRANSCRIPT_SKIP,
+      details: {
+        signalType: 'min_chars_threshold',
+        transcriptLength: normalized.length,
+        minTranscriptChars
       }
     };
   }
@@ -227,10 +248,12 @@ function evaluateAnalyzeSkipGate(transcript) {
   if (NO_SPEECH_PATTERNS.some((pattern) => pattern.test(normalized))) {
     return {
       shouldSkip: true,
-      reason: ANALYZE_SKIP_REASONS.NO_SPEECH_OR_NOISE,
+      reason: ANALYZE_SKIP_REASONS.LOW_SIGNAL_TRANSCRIPT_SKIP,
       details: {
+        signalType: 'no_speech_or_noise',
         normalizedTranscript: normalized,
-        transcriptLength: normalized.length
+        transcriptLength: normalized.length,
+        minTranscriptChars
       }
     };
   }
@@ -238,10 +261,12 @@ function evaluateAnalyzeSkipGate(transcript) {
   if (SERVICE_PHRASE_PATTERNS.some((pattern) => pattern.test(normalized))) {
     return {
       shouldSkip: true,
-      reason: ANALYZE_SKIP_REASONS.SERVICE_PHRASE_ONLY,
+      reason: ANALYZE_SKIP_REASONS.LOW_SIGNAL_TRANSCRIPT_SKIP,
       details: {
+        signalType: 'service_phrase_only',
         normalizedTranscript: normalized,
-        transcriptLength: normalized.length
+        transcriptLength: normalized.length,
+        minTranscriptChars
       }
     };
   }
@@ -255,12 +280,14 @@ function evaluateAnalyzeSkipGate(transcript) {
   if (!businessSignalDetected && meaningfulWords.length <= 2 && normalized.length <= 80) {
     return {
       shouldSkip: true,
-      reason: ANALYZE_SKIP_REASONS.LOW_INFORMATIVE_CONTENT,
+      reason: ANALYZE_SKIP_REASONS.LOW_SIGNAL_TRANSCRIPT_SKIP,
       details: {
+        signalType: 'low_informative_content',
         transcriptLength: normalized.length,
         wordsCount: words.length,
         meaningfulWordsCount: meaningfulWords.length,
-        businessSignalDetected
+        businessSignalDetected,
+        minTranscriptChars
       }
     };
   }
@@ -268,12 +295,14 @@ function evaluateAnalyzeSkipGate(transcript) {
   if (!businessSignalDetected && words.length >= 4 && singleCharWordRatio >= 0.75) {
     return {
       shouldSkip: true,
-      reason: ANALYZE_SKIP_REASONS.LOW_TRANSCRIPT_QUALITY,
+      reason: ANALYZE_SKIP_REASONS.LOW_SIGNAL_TRANSCRIPT_SKIP,
       details: {
+        signalType: 'low_transcript_quality',
         transcriptLength: normalized.length,
         wordsCount: words.length,
         singleCharWordRatio: Number(singleCharWordRatio.toFixed(3)),
-        businessSignalDetected
+        businessSignalDetected,
+        minTranscriptChars
       }
     };
   }
@@ -285,7 +314,8 @@ function evaluateAnalyzeSkipGate(transcript) {
       transcriptLength: normalized.length,
       wordsCount: words.length,
       meaningfulWordsCount: meaningfulWords.length,
-      businessSignalDetected
+      businessSignalDetected,
+      minTranscriptChars
     }
   };
 }
@@ -401,7 +431,13 @@ function normalizeAiUsagePayload(rawUsage = {}, fallback = {}) {
   };
 }
 
-function createCallProcessor({ storage, analyzeCall, sendTelegramMessage, logger }) {
+function createCallProcessor({
+  storage,
+  analyzeCall,
+  sendTelegramMessage,
+  logger,
+  analyzeMinTranscriptChars = DEFAULT_ANALYZE_MIN_TRANSCRIPT_CHARS
+}) {
   async function appendAuditSafely(payload) {
     try {
       await storage.appendAuditEvent(payload);
@@ -436,6 +472,7 @@ function createCallProcessor({ storage, analyzeCall, sendTelegramMessage, logger
     const phone = normalizePhone(phoneRaw);
     const callDateTime = payload.callDateTime.trim();
     const transcript = payload.transcript.trim();
+    const externalCallId = isNonEmptyString(payload.callId) ? payload.callId.trim().slice(0, 256) : '';
     const callMeta = resolveOptionalCallMeta(payload);
     const employeePhone = callMeta.callType
       ? normalizeOptionalPhone(resolveEmployeePhoneFromCallMeta(callMeta))
@@ -443,11 +480,15 @@ function createCallProcessor({ storage, analyzeCall, sendTelegramMessage, logger
     const requestId = isNonEmptyString(options.requestId) ? options.requestId.trim() : '';
     const source = getHistorySource(options.source);
     const transcriptHash = buildTranscriptHash(transcript);
-    const dedupKey = buildDedupKey({
+    const contentBasedDedupKey = buildDedupKey({
       phone,
       callDateTime,
       transcriptHash
     });
+    const dedupKey = externalCallId
+      ? buildCallIdDedupKey(`${source}|${externalCallId}`)
+      : contentBasedDedupKey;
+    const dedupKeyType = externalCallId ? 'external_call_id' : 'content_hash';
 
     const callEvent = await storage.createCallEvent({
       source,
@@ -462,7 +503,7 @@ function createCallProcessor({ storage, analyzeCall, sendTelegramMessage, logger
     });
 
     const callEventId = callEvent.id;
-    const callId = dedupKey;
+    const callId = externalCallId || dedupKey;
     let employee = null;
 
     if (employeePhone && typeof storage.findActiveEmployeeByPhone === 'function') {
@@ -485,6 +526,9 @@ function createCallProcessor({ storage, analyzeCall, sendTelegramMessage, logger
       payload: {
         source,
         dedupKey,
+        dedupKeyType,
+        contentBasedDedupKey,
+        externalCallId,
         callType: callMeta.callType,
         employeePhone,
         employeeId: employee?.id || null
@@ -544,10 +588,20 @@ function createCallProcessor({ storage, analyzeCall, sendTelegramMessage, logger
     if (!dedupLock.acquired) {
       const response = {
         status: 'duplicate',
-        reason: ANALYZE_SKIP_REASONS.DUPLICATE_OR_ALREADY_PROCESSED,
+        reason: ANALYZE_SKIP_REASONS.DUPLICATE_CALL_SKIP,
         phone,
         callDateTime
       };
+
+      logger.info('cost_guard_dedup_skip', {
+        requestId,
+        callEventId,
+        callId,
+        stage: 'before_analyze',
+        reason: response.reason,
+        dedupKeyType,
+        dedupPreviousStatus: dedupLock.previousStatus
+      });
 
       await storage.updateCallEventStatus({
         callEventId,
@@ -578,14 +632,16 @@ function createCallProcessor({ storage, analyzeCall, sendTelegramMessage, logger
         transcriptCharsSent: 0,
         durationMs: 0,
         responseStatus: 'skipped',
-        skipReason: ANALYZE_SKIP_REASONS.DUPLICATE_OR_ALREADY_PROCESSED,
+        skipReason: ANALYZE_SKIP_REASONS.DUPLICATE_CALL_SKIP,
         estimatedCostRub: null
       });
 
       return response;
     }
 
-    const analyzeSkipGate = evaluateAnalyzeSkipGate(transcript);
+    const analyzeSkipGate = evaluateAnalyzeSkipGate(transcript, {
+      minTranscriptChars: analyzeMinTranscriptChars
+    });
     if (analyzeSkipGate.shouldSkip) {
       const response = {
         status: 'ignored',
@@ -593,6 +649,16 @@ function createCallProcessor({ storage, analyzeCall, sendTelegramMessage, logger
         phone,
         callDateTime
       };
+
+      logger.info('cost_guard_analyze_skip', {
+        requestId,
+        callEventId,
+        callId,
+        stage: 'before_analyze',
+        reason: analyzeSkipGate.reason,
+        transcriptLength: transcript.length,
+        minTranscriptCharsConfigured: analyzeMinTranscriptChars
+      });
 
       await storage.completeDedupKey({
         dedupKey,

@@ -49,7 +49,8 @@ function uniquePaths(paths) {
 }
 
 function extractStringField(raw, fallbackPath, configuredPath) {
-  const candidatePaths = uniquePaths([configuredPath, fallbackPath]);
+  const fallbackPaths = Array.isArray(fallbackPath) ? fallbackPath : [fallbackPath];
+  const candidatePaths = uniquePaths([configuredPath, ...fallbackPaths]);
 
   for (const path of candidatePaths) {
     const extracted = toNonEmptyString(getValueByPath(raw, path));
@@ -113,6 +114,9 @@ function normalizeIncomingCallPayload(raw, adapterConfig = {}) {
       : '',
     destinationNumber: isNonEmptyString(adapterConfig.destinationNumberFieldPath)
       ? adapterConfig.destinationNumberFieldPath.trim()
+      : '',
+    callId: isNonEmptyString(adapterConfig.callIdFieldPath)
+      ? adapterConfig.callIdFieldPath.trim()
       : ''
   };
 
@@ -123,6 +127,11 @@ function normalizeIncomingCallPayload(raw, adapterConfig = {}) {
   const callerNumberField = extractStringField(raw, 'callerNumber', configuredPaths.callerNumber);
   const calleeNumberField = extractStringField(raw, 'calleeNumber', configuredPaths.calleeNumber);
   const destinationNumberField = extractStringField(raw, 'destinationNumber', configuredPaths.destinationNumber);
+  const callIdField = extractStringField(
+    raw,
+    ['callId', 'externalCallId', 'recordFileName', 'recordingId'],
+    configuredPaths.callId
+  );
   const errors = [];
 
   if (!isNonEmptyString(phoneField.value)) {
@@ -158,7 +167,8 @@ function normalizeIncomingCallPayload(raw, adapterConfig = {}) {
       callType: callTypeField.resolvedPath || '',
       callerNumber: callerNumberField.resolvedPath || '',
       calleeNumber: calleeNumberField.resolvedPath || '',
-      destinationNumber: destinationNumberField.resolvedPath || ''
+      destinationNumber: destinationNumberField.resolvedPath || '',
+      callId: callIdField.resolvedPath || ''
     },
     topLevelKeys: Object.keys(raw).sort()
   };
@@ -180,7 +190,8 @@ function normalizeIncomingCallPayload(raw, adapterConfig = {}) {
       ...(isNonEmptyString(callTypeField.value) ? { callType: callTypeField.value } : {}),
       ...(isNonEmptyString(callerNumberField.value) ? { callerNumber: callerNumberField.value } : {}),
       ...(isNonEmptyString(calleeNumberField.value) ? { calleeNumber: calleeNumberField.value } : {}),
-      ...(isNonEmptyString(destinationNumberField.value) ? { destinationNumber: destinationNumberField.value } : {})
+      ...(isNonEmptyString(destinationNumberField.value) ? { destinationNumber: destinationNumberField.value } : {}),
+      ...(isNonEmptyString(callIdField.value) ? { callId: callIdField.value } : {})
     },
     adapterMeta
   };
