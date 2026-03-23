@@ -75,6 +75,76 @@ function normalizeSpeakerRoleConfidence(value) {
   return null;
 }
 
+function normalizeShortText(value, maxLength = 256) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  const normalized = value.trim();
+  if (!normalized) {
+    return '';
+  }
+
+  return normalized.slice(0, maxLength);
+}
+
+function normalizeAiUsageStatus(value) {
+  const normalized = normalizeShortText(value, 40).toLowerCase();
+  if (normalized === 'success' || normalized === 'failed' || normalized === 'skipped') {
+    return normalized;
+  }
+
+  return 'failed';
+}
+
+function normalizeAiUsageOperation(value) {
+  const normalized = normalizeShortText(value, 40).toLowerCase();
+  if (!normalized) {
+    return 'analyze';
+  }
+
+  return normalized;
+}
+
+function normalizeNullablePositiveInteger(value) {
+  const normalized = normalizePositiveInteger(value, -1);
+  if (normalized < 0) {
+    return null;
+  }
+
+  return normalized;
+}
+
+function normalizeNullableNonNegativeInteger(value) {
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) {
+    return value;
+  }
+
+  if (typeof value === 'string' && /^[0-9]+$/.test(value.trim())) {
+    const parsed = Number.parseInt(value.trim(), 10);
+    if (Number.isSafeInteger(parsed) && parsed >= 0) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+function normalizeEstimatedCostRub(value) {
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+    return Number(value.toFixed(6));
+  }
+
+  if (typeof value === 'string' && /^[0-9]+([.,][0-9]+)?$/.test(value.trim())) {
+    const parsed = Number.parseFloat(value.trim().replace(',', '.'));
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return Number(parsed.toFixed(6));
+    }
+  }
+
+  return null;
+}
+
 function buildPostgresStorage({ pool, logger }) {
   async function healthcheck() {
     await pool.query('SELECT 1');
@@ -154,6 +224,71 @@ function buildPostgresStorage({ pool, logger }) {
       VALUES ($1, $2, $3::jsonb)
       `,
       [callEventId, eventType, JSON.stringify(payload || {})]
+    );
+  }
+
+  async function insertAiUsageAudit({
+    xRequestId = '',
+    callEventId = null,
+    callId = '',
+    operation = 'analyze',
+    model = '',
+    provider = '',
+    promptTokens = null,
+    completionTokens = null,
+    totalTokens = null,
+    transcriptCharsRaw = null,
+    transcriptCharsSent = null,
+    durationMs = null,
+    responseStatus = 'failed',
+    skipReason = '',
+    estimatedCostRub = null,
+    createdAt = ''
+  }) {
+    await pool.query(
+      `
+      INSERT INTO ai_usage_audit (
+        x_request_id,
+        call_event_id,
+        call_id,
+        operation,
+        model,
+        provider,
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+        transcript_chars_raw,
+        transcript_chars_sent,
+        duration_ms,
+        response_status,
+        skip_reason,
+        estimated_cost_rub,
+        created_at
+      )
+      VALUES (
+        $1, $2, $3, $4, $5, $6,
+        $7, $8, $9, $10, $11, $12,
+        $13, $14, $15, COALESCE($16::timestamptz, NOW())
+      )
+      `,
+      [
+        normalizeShortText(xRequestId, 128) || null,
+        normalizeNullablePositiveInteger(callEventId),
+        normalizeShortText(callId, 256) || null,
+        normalizeAiUsageOperation(operation),
+        normalizeShortText(model, 120) || null,
+        normalizeShortText(provider, 80) || null,
+        normalizeNullableNonNegativeInteger(promptTokens),
+        normalizeNullableNonNegativeInteger(completionTokens),
+        normalizeNullableNonNegativeInteger(totalTokens),
+        normalizeNullableNonNegativeInteger(transcriptCharsRaw),
+        normalizeNullableNonNegativeInteger(transcriptCharsSent),
+        normalizeNullableNonNegativeInteger(durationMs),
+        normalizeAiUsageStatus(responseStatus),
+        normalizeShortText(skipReason, 200) || null,
+        normalizeEstimatedCostRub(estimatedCostRub),
+        toDateOrNull(createdAt)
+      ]
     );
   }
 
@@ -521,6 +656,7 @@ function buildPostgresStorage({ pool, logger }) {
     createCallEvent,
     updateCallEventStatus,
     appendAuditEvent,
+    insertAiUsageAudit,
     saveSummary,
     saveTelegramDelivery,
     isPhoneIgnored,

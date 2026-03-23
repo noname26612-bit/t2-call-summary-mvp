@@ -1,0 +1,24 @@
+[Unit]
+Description=Self-hosted PostgreSQL backup (t2-call-summary)
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=artem266
+Group=artem266
+WorkingDirectory=/home/artem266/t2-call-summary-mvp
+Environment=T2_MAIN_ENV_FILE=/opt/t2-call-summary/main.env
+Environment=T2_PG_BACKUP_DIR=/opt/t2-call-summary/backups/self_hosted
+Environment=T2_PG_BACKUP_RETENTION_DAYS=14
+Environment=T2_PG_BACKUP_IMAGE=postgres:17-alpine
+Environment=T2_PG_BACKUP_NETWORK=t2-app-net
+Environment=T2_PG_BACKUP_HOST=t2-postgres
+Environment=T2_PG_BACKUP_PORT=5432
+ExecStart=/home/artem266/t2-call-summary-mvp/scripts/backupSelfHostedPostgres.sh
+StandardOutput=journal
+StandardError=journal
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

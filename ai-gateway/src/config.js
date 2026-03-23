@@ -101,6 +101,37 @@ function parseNonNegativeIntFromNames(canonicalName, fallbackNames = [], default
   return defaultValue;
 }
 
+function parseNonNegativeFloatValue(rawValue, nameForError) {
+  if (rawValue === undefined || rawValue === null || String(rawValue).trim() === '') {
+    return null;
+  }
+
+  const normalized = String(rawValue).trim().replace(',', '.');
+  if (!/^[0-9]+(\.[0-9]+)?$/.test(normalized)) {
+    throw new Error(`${nameForError} must be a non-negative number`);
+  }
+
+  const parsed = Number.parseFloat(normalized);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`${nameForError} must be a non-negative number`);
+  }
+
+  return parsed;
+}
+
+function parseNonNegativeFloatFromNames(canonicalName, fallbackNames = [], defaultValue) {
+  const candidates = [canonicalName, ...fallbackNames];
+
+  for (const name of candidates) {
+    const parsed = parseNonNegativeFloatValue(process.env[name], name);
+    if (parsed !== null) {
+      return parsed;
+    }
+  }
+
+  return defaultValue;
+}
+
 function normalizeModelId(value) {
   return isNonEmptyString(value) ? value.trim() : '';
 }
@@ -186,7 +217,19 @@ function loadConfig() {
         preferBareOpenAI: true
       }),
       timeoutMs: parsePositiveIntFromNames('POLZA_TIMEOUT_MS', [], DEFAULT_POLZA_TIMEOUT_MS),
-      maxRetries: parseNonNegativeIntFromNames('POLZA_MAX_RETRIES', [], DEFAULT_POLZA_MAX_RETRIES)
+      maxRetries: parseNonNegativeIntFromNames('POLZA_MAX_RETRIES', [], DEFAULT_POLZA_MAX_RETRIES),
+      pricing: {
+        analyzeInputRubPer1kTokens: parseNonNegativeFloatFromNames(
+          'POLZA_ANALYZE_INPUT_RUB_PER_1K_TOKENS',
+          [],
+          null
+        ),
+        analyzeOutputRubPer1kTokens: parseNonNegativeFloatFromNames(
+          'POLZA_ANALYZE_OUTPUT_RUB_PER_1K_TOKENS',
+          [],
+          null
+        )
+      }
     }
   };
 }

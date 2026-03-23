@@ -2,6 +2,31 @@
 
 Operational progress log for post-baseline work after the successful Polza production cutover.
 
+## 2026-03-23 — Cost reduction wave #1 completed
+
+Этап `cost reduction wave #1` закрыт.
+
+Что выполнено:
+
+- production runtime БД переведён с Yandex Managed PostgreSQL на self-hosted PostgreSQL на той же VM;
+- managed PostgreSQL cluster `t2-prod-pg` удалён, billing tail по этой статье закрыт;
+- внедрён двухэтапный skip-layer, из-за которого часть звонков не доходит до `transcribe` и/или `analyze`;
+- включена денежная AI-телеметрия: `estimated_cost_rub` теперь пишется в свежие `ai_usage_audit` rows и агрегируется в отчёте;
+- backup/restore контур для self-hosted PostgreSQL активен и проверен;
+- production health/smoke после изменений пройдены без регрессии Telegram output для валидных звонков.
+
+Подтверждённый эффект:
+
+- self-hosted PostgreSQL стал единственной production runtime DB;
+- `yc managed-postgresql cluster list` после удаления пуст, `get --name t2-prod-pg` возвращает `not found`;
+- по текущему production snapshot (`api_process_call`, окно 24h) `avg_cost_rub_per_processed_call = 0.391346 ₽`;
+- по snapshot за 24h `24 из 29` наблюдаемых звонков (`82.76%`) прошли без AI-вызовов за счёт skip-layer.
+
+Статус:
+
+- этап считается выполненным и закрытым;
+- следующий точный monthly cost delta нужно подтвердить уже по следующему полному billing cycle, но ключевые рычаги экономии реализованы и подтверждены production-артефактами.
+
 ## Goal of current phase (post-baseline improvements, wave #1)
 
 Keep the existing production baseline stable after the confirmed Polza cutover:
@@ -9,7 +34,7 @@ Keep the existing production baseline stable after the confirmed Polza cutover:
 - keep main app on the existing Yandex VM
 - keep main app and `ai-gateway` as separate Docker containers on the same VM
 - keep container-to-container routing on user-defined Docker network `t2-app-net`
-- keep PostgreSQL topology unchanged
+- keep PostgreSQL runtime on the same VM (`self-hosted PostgreSQL` container as source of truth)
 - keep Telegram transport/integration unchanged (same bot/chat delivery path + add transcript button flow)
 - keep `Telegram message format v2.1` as completed wave #1 baseline result
 - Telegram callback polling via `getUpdates` completed (no public webhook dependency)
@@ -27,15 +52,184 @@ These decisions are considered fixed unless explicitly changed:
 - main zone for first deploy: `ru-central1-a`
 - VPC: `t2-prod-net`
 - VM security group: `sg-t2-vm`
-- PostgreSQL security group: `sg-t2-postgres`
+- PostgreSQL security group: `sg-t2-postgres` (historical, was used by managed PostgreSQL phase)
 - service account for image pull: `images-puller`
-- PostgreSQL cluster: `t2-prod-pg` (private)
+- PostgreSQL cluster: `t2-prod-pg` (historical; deleted on `2026-03-23` after self-hosted cutover verification)
 - current deploy style: fully manual, beginner-friendly, one small verified step at a time
 - current fixed AI strategy: **Polza as long-term upstream provider**
 - `ai-gateway` remains in architecture as thin internal adapter
 - current production main app gateway URL: `http://ai-gateway:3001`
 - host-level VM health check for gateway: `http://127.0.0.1:3001/healthz`
 - `ai-gateway` is not used as a separate public service
+
+## Completed production workstream (`2026-03-23`): managed PostgreSQL removal -> self-hosted PostgreSQL on VM
+
+Target architecture (implemented):
+
+- `main app`, `ai-gateway`, and `postgres` run on one production VM
+- self-hosted `postgres:17-alpine` container is runtime DB source of truth
+- persistent volume for DB data: `t2-postgres-data`
+- managed PostgreSQL is no longer used in runtime wiring
+
+Production execution highlights:
+
+- created managed pre-cutover backups:
+  - `/opt/t2-call-summary/backups/managed/managed_pre_cutover_live_20260323T110231Z.dump`
+  - `/opt/t2-call-summary/backups/managed/managed_pre_cutover_final_20260323T110236Z.dump`
+- restored data into self-hosted PostgreSQL
+- switched main app DB env to `DB_HOST=t2-postgres`, `DB_PORT=5432`
+- applied migrations on self-hosted DB, including:
+  - `006_ai_usage_audit.sql`
+- restarted only required containers (`t2-postgres`, `t2-call-summary`)
+
+Post-cutover production verification:
+
+- container health:
+  - `t2-postgres` -> `healthy`
+  - `t2-call-summary` -> `healthy`
+  - `ai-gateway` -> `healthy`
+- health endpoints:
+  - `GET http://127.0.0.1:3000/healthz` -> `database=ok`
+  - `GET http://127.0.0.1:3001/healthz` -> `status=ok`
+- DB identity from app runtime confirmed self-hosted endpoint:
+  - `inet_server_addr() = 172.18.0.4/32`
+  - `version() = PostgreSQL 17.9 (Alpine)`
+- row-count sanity passed for core runtime tables
+- controlled container restart verification passed:
+  - `t2-postgres` and `t2-call-summary` recover to `healthy` without manual repair
+
+Backup/restore operations (implemented):
+
+- periodic backup script:
+  - `scripts/backupSelfHostedPostgres.sh`
+- systemd automation:
+  - `ops/systemd/t2-postgres-backup.service`
+  - `ops/systemd/t2-postgres-backup.timer`
+- production timer enabled:
+  - `t2-postgres-backup.timer` (daily `02:15 UTC`, retention `14d`)
+- restore runbook:
+  - `ops/POSTGRES_RESTORE_RUNBOOK.md`
+
+Rollback path (documented):
+
+1. restore pre-cutover `/opt/t2-call-summary/main.env` backup with managed DB host/port
+2. restart `t2-call-summary`
+3. verify `/healthz`
+4. keep self-hosted dump for forensics
+
+## Workstream (`2026-03-23`): cost observability + AI skip-layer (ATS transcription / call summary)
+
+Scope kept intentionally narrow:
+
+- no Telegram business output changes
+- no business rules changes
+- no provider strategy changes (`Polza` stays primary)
+- no topology changes (`main app` + `ai-gateway` on one Yandex VM)
+- no direct OpenAI runtime comeback
+
+Implemented in codebase:
+
+- added technical AI usage telemetry for `analyze` and `transcribe` paths
+- added correlation propagation by `x-request-id` across poller -> main app -> ai-gateway
+- added conservative skip-layer before transcription (`skipped_before_transcribe:*`):
+  - outgoing unanswered
+  - call duration `<= 10s`
+  - duplicate event
+  - internal/ignored phone
+  - audio too small / unusable audio metadata / missing audio
+- added conservative skip-layer after transcription, before analyze (`skipped_before_analyze:*`):
+  - internal/ignored phone
+  - duplicate/already processed
+  - no speech/noise
+  - service phrase only
+  - low informative transcript
+  - low transcript quality
+- added optional cost estimation for analyze path from runtime pricing config:
+  - `POLZA_ANALYZE_INPUT_RUB_PER_1K_TOKENS`
+  - `POLZA_ANALYZE_OUTPUT_RUB_PER_1K_TOKENS`
+- added schema-only migration `006_ai_usage_audit.sql`
+- added manual aggregation report command:
+  - `npm run audit:ai-usage -- --hours 24 --source tele2_poll_once`
+
+Production verification snapshot (`2026-03-23`):
+
+- stage-1 (pre-transcribe) verified with isolated Tele2 mock run:
+  - `skipped_before_transcribe:outgoing_unanswered`
+  - `skipped_before_transcribe:short_conversation_le_10s`
+  - `skipped_before_transcribe:internal_or_ignored_phone`
+  - `skipped_before_transcribe:audio_too_small`
+  - `skipped_before_transcribe:unusable_audio_metadata`
+  - `skipped_before_transcribe:duplicate_event`
+- stage-2 (pre-analyze) verified via `/api/process-call` smoke:
+  - `skipped_before_analyze:empty_transcript`
+  - `skipped_before_analyze:internal_or_ignored_phone`
+  - `skipped_before_analyze:no_speech_or_noise`
+  - `skipped_before_analyze:service_phrase_only`
+  - `skipped_before_analyze:low_informative_content`
+  - `skipped_before_analyze:low_transcript_quality`
+  - `skipped_before_analyze:duplicate_or_already_processed`
+- valid call full path preserved:
+  - `status=processed`
+  - `telegram.status=sent`
+  - Telegram text kept expected business format (`Итог по фактам`, `Категория`, `Тип звонка`)
+- `ai_usage_audit` populated with structured rows for both skip stages and analyze success
+- report command executed successfully and returned:
+  - average cost/day
+  - average/p50/p95 tokens
+  - skipped counts by reason
+  - calls with `>1` AI invocation
+  - path mix (zero AI / transcribe-only / transcribe+analyze / analyze-only)
+
+## Completed final narrow production pass (`2026-03-23`): managed PostgreSQL billing tail closure + money telemetry enablement
+
+Scope kept intentionally narrow:
+
+- no Telegram business output refactor
+- no provider strategy change (`Polza` remains primary)
+- no topology change (`main app` + `ai-gateway` + `t2-postgres` on one VM)
+- no storage-layer redesign
+
+Managed PostgreSQL billing tail closure (executed):
+
+- pre-delete safety checks passed:
+  - app/gateway health checks `200`
+  - runtime DB env points to `DB_HOST=t2-postgres`, `DB_PORT=5432`
+  - live DB identity from app container: `inet_server_addr=172.18.0.4/32`, `PostgreSQL 17.9`
+  - fresh self-hosted backup created:
+    - `/opt/t2-call-summary/backups/self_hosted/self_hosted_ats_call_summary_20260323T120741Z.dump`
+  - managed pre-cutover dumps preserved:
+    - `/opt/t2-call-summary/backups/managed/managed_pre_cutover_live_20260323T110231Z.dump`
+    - `/opt/t2-call-summary/backups/managed/managed_pre_cutover_final_20260323T110236Z.dump`
+- managed cluster removed via `yc`:
+  - deleted cluster id: `c9q80qaoj8fmrrac9kgr` (`t2-prod-pg`)
+  - `yc managed-postgresql cluster list` now empty
+  - `yc managed-postgresql cluster get --name t2-prod-pg` -> `not found`
+- post-delete runtime health verified:
+  - `GET /healthz` on main app and gateway are `ok`
+  - new writes continue on self-hosted DB (`call_events` ids `295`, `296` created after deletion)
+
+Estimated money telemetry enablement (executed):
+
+- `ai-gateway` runtime patched to ingest provider money fields:
+  - `usage.cost_rub` / `usage.cost` -> `aiUsage.estimatedCostRub`
+  - fallback analyze pricing path kept for cases without provider cost fields
+- production pricing env wired in `/opt/t2-call-summary/gateway.env`:
+  - `POLZA_ANALYZE_INPUT_RUB_PER_1K_TOKENS=0.023963125`
+  - `POLZA_ANALYZE_OUTPUT_RUB_PER_1K_TOKENS=0.191705`
+- pricing source was taken from live provider model endpoint:
+  - `GET https://polza.ai/api/v1/models/openai/gpt-5-mini`
+  - pricing snapshot: `prompt_per_million=23.96312500 RUB`, `completion_per_million=191.70500000 RUB`
+- runtime pickup confirmed in startup log:
+  - `analyzeInputRubPer1kTokens=0.023963125`
+  - `analyzeOutputRubPer1kTokens=0.191705`
+- fresh production-safe valid-call smokes after deploy:
+  - `x-request-id=prod-pass-cost-20260323-001` -> `processed`, `telegram.status=sent`, `estimatedCostRub=0.480844`
+  - `x-request-id=prod-pass-cost-20260323-002` -> `processed`, `telegram.status=sent`, `estimatedCostRub=0.348136`
+- DB audit proof:
+  - `ai_usage_audit` rows `id=63` and `id=64` (`operation=analyze`) have non-null `estimated_cost_rub`
+- report path updated and verified:
+  - `npm run audit:ai-usage -- --hours 24 --source api_process_call`
+  - money aggregates now present (`avg_cost_rub_per_processed_call`, per-operation estimated cost, null-cost share)
 
 ## Completed narrow production rollout (`2026-03-18`): Polza upstream failure stabilization (`POLZA_REQUEST_FAILED`)
 
@@ -348,7 +542,7 @@ Acceptance criteria for this workstream:
 - Telegram delivery status in production smoke: `sent`
 - old direct OpenAI path is no longer the active production runtime route
 - external EU/VPS gateway host is not used
-- PostgreSQL topology unchanged
+- PostgreSQL topology unchanged at that historical milestone (later superseded by `2026-03-23` self-hosted cutover)
 - Telegram transport path preserved (active pass adds transcript button/callback only)
 - product decision fixed:
   - no separate gateway VM in another region
@@ -506,7 +700,7 @@ Current narrow milestone in post-baseline improvements wave #1:
 - keep `Telegram message format v2.1` as completed baseline milestone
 - keep transcript storage + `.txt` delivery as completed baseline for transcript feature
 - keep Telegram callback updates via `getUpdates` as completed baseline behavior
-- keep all topology/provider/routing changes out of scope
+- keep provider/routing changes out of scope (DB runtime already migrated to self-hosted baseline)
 
 ## Operational warning (Tele2 tokens)
 
@@ -556,7 +750,7 @@ Status:
 
 ## Out of scope for this phase
 
-- moving PostgreSQL out of current setup
+- moving PostgreSQL off the current VM into separate infrastructure
 - moving main app off current Yandex VM
 - deploying a separate gateway VM in another region only to bypass region limits
 - Redis / queues / workers

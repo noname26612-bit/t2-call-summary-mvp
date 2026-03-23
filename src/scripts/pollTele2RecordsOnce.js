@@ -8,7 +8,8 @@ const dotenv = require('dotenv');
 const { loadConfig } = require('../config/env');
 const { createPgPool } = require('../db/createPgPool');
 const { createLogger, serializeError } = require('../services/logger');
-const { resolveClientPhoneFromCallMeta } = require('../utils/callParticipants');
+const { resolveClientPhoneFromCallMeta, normalizeCallType } = require('../utils/callParticipants');
+const { normalizePhone } = require('../utils/ignoredPhones');
 
 dotenv.config();
 
@@ -21,7 +22,22 @@ const DEFAULT_FETCH_LIMIT = 30;
 const DEFAULT_MAX_CANDIDATES = 5;
 const DEFAULT_MIN_AUDIO_BYTES = 4096;
 const DEFAULT_TIMEZONE_OFFSET = '+03:00';
-const MIN_CONVERSATION_DURATION_SECONDS = 5;
+const MIN_CONVERSATION_DURATION_SECONDS = 10;
+const PRE_TRANSCRIBE_SKIP_REASONS = Object.freeze({
+  DUPLICATE_EVENT: 'skipped_before_transcribe:duplicate_event',
+  DUPLICATE_EVENT_DRY_RUN: 'skipped_before_transcribe:duplicate_event_dry_run',
+  MISSING_RECORD_FILE_NAME: 'skipped_before_transcribe:missing_record_file_name',
+  UNUSABLE_METADATA_MISSING_PHONE: 'skipped_before_transcribe:unusable_metadata_missing_phone',
+  UNUSABLE_METADATA_MISSING_CALL_DATETIME: 'skipped_before_transcribe:unusable_metadata_missing_call_datetime',
+  OUTGOING_UNANSWERED: 'skipped_before_transcribe:outgoing_unanswered',
+  MISSED_CALL: 'skipped_before_transcribe:missed_call',
+  MISSING_CONVERSATION_DURATION: 'skipped_before_transcribe:missing_conversation_duration',
+  SHORT_CONVERSATION_LE_10S: 'skipped_before_transcribe:short_conversation_le_10s',
+  INTERNAL_OR_IGNORED_PHONE: 'skipped_before_transcribe:internal_or_ignored_phone',
+  AUDIO_TOO_SMALL: 'skipped_before_transcribe:audio_too_small',
+  UNUSABLE_AUDIO_METADATA: 'skipped_before_transcribe:unusable_audio_metadata',
+  AUDIO_RECORD_NOT_FOUND: 'skipped_before_transcribe:audio_record_not_found'
+});
 const CONVERSATION_DURATION_FIELDS = [
   'callDurationSec',
   'callDurationSeconds',
@@ -566,11 +582,23 @@ function recordLooksMissed(record) {
 function evaluateConversationGate(record) {
   const durationMeta = extractConversationDuration(record);
   const missedMeta = recordLooksMissed(record);
+  const callType = normalizeCallType(record?.callType);
+
+  if (callType === 'OUTGOING' && missedMeta.isMissed) {
+    return {
+      shouldAnalyze: false,
+      reason: PRE_TRANSCRIBE_SKIP_REASONS.OUTGOING_UNANSWERED,
+      errorCode: 'OUTGOING_UNANSWERED',
+      errorMessage: `Outgoing call marked as unanswered by field "${missedMeta.sourceField}"`,
+      durationSeconds: durationMeta.seconds,
+      durationSourceField: durationMeta.sourceField
+    };
+  }
 
   if (missedMeta.isMissed) {
     return {
       shouldAnalyze: false,
-      reason: 'missed_call',
+      reason: PRE_TRANSCRIBE_SKIP_REASONS.MISSED_CALL,
       errorCode: 'MISSED_CALL',
       errorMessage: `Call marked as missed by field "${missedMeta.sourceField}"`,
       durationSeconds: durationMeta.seconds,
@@ -581,7 +609,7 @@ function evaluateConversationGate(record) {
   if (typeof durationMeta.seconds !== 'number' || Number.isNaN(durationMeta.seconds)) {
     return {
       shouldAnalyze: false,
-      reason: 'missing_conversation_duration',
+      reason: PRE_TRANSCRIBE_SKIP_REASONS.MISSING_CONVERSATION_DURATION,
       errorCode: 'CONVERSATION_DURATION_MISSING',
       errorMessage: `Cannot resolve conversation duration from Tele2 record (expected one of: ${CONVERSATION_DURATION_FIELDS.join(', ')})`,
       durationSeconds: null,
@@ -592,7 +620,7 @@ function evaluateConversationGate(record) {
   if (durationMeta.seconds <= MIN_CONVERSATION_DURATION_SECONDS) {
     return {
       shouldAnalyze: false,
-      reason: 'short_conversation',
+      reason: PRE_TRANSCRIBE_SKIP_REASONS.SHORT_CONVERSATION_LE_10S,
       errorCode: 'CONVERSATION_DURATION_TOO_SHORT',
       errorMessage: `Conversation duration ${durationMeta.seconds} sec is not greater than ${MIN_CONVERSATION_DURATION_SECONDS} sec`,
       durationSeconds: durationMeta.seconds,
@@ -758,6 +786,8 @@ async function downloadTele2Audio({
 async function transcribeViaGateway({
   tempFilePath,
   recordFileName,
+  requestId,
+  callId,
   aiGatewayUrl,
   aiGatewaySecret,
   aiGatewayTranscribePath,
@@ -769,7 +799,10 @@ async function transcribeViaGateway({
   const uploadFileName = `${sanitizeRecordFileName(recordFileName)}.mp3`;
 
   const formData = new FormData();
-  formData.append('requestId', `tele2-poll-${crypto.randomUUID()}`);
+  formData.append('requestId', requestId);
+  if (isNonEmptyString(callId)) {
+    formData.append('callId', callId.trim());
+  }
   formData.append('fileName', uploadFileName);
   formData.append('mimeType', 'audio/mpeg');
   if (isNonEmptyString(transcribeModel)) {
@@ -784,7 +817,8 @@ async function transcribeViaGateway({
   const response = await fetchWithTimeout(url, {
     method: 'POST',
     headers: {
-      'x-gateway-secret': aiGatewaySecret
+      'x-gateway-secret': aiGatewaySecret,
+      'x-request-id': requestId
     },
     body: formData
   }, timeoutMs);
@@ -802,6 +836,9 @@ async function transcribeViaGateway({
     requestError.statusCode = response.status;
     requestError.code = payload?.code || 'AI_GATEWAY_TRANSCRIBE_HTTP_ERROR';
     requestError.responseBody = payload || raw;
+    if (payload?.aiUsage && typeof payload.aiUsage === 'object') {
+      requestError.aiUsage = payload.aiUsage;
+    }
     throw requestError;
   }
 
@@ -817,7 +854,8 @@ async function transcribeViaGateway({
     model: isNonEmptyString(payload?.model)
       ? payload.model.trim()
       : (isNonEmptyString(transcribeModel) ? transcribeModel.trim() : ''),
-    audioBytes: Number.isInteger(payload?.audioBytes) ? payload.audioBytes : audioBuffer.length
+    audioBytes: Number.isInteger(payload?.audioBytes) ? payload.audioBytes : audioBuffer.length,
+    aiUsage: payload?.aiUsage && typeof payload.aiUsage === 'object' ? payload.aiUsage : null
   };
 }
 
@@ -853,6 +891,8 @@ function isEmptyTranscriptionCode(errorCode) {
 async function runTranscriptionAttempt({
   tempFilePath,
   recordFileName,
+  requestId,
+  callId,
   aiGatewayUrl,
   aiGatewaySecret,
   aiGatewayTranscribePath,
@@ -865,6 +905,8 @@ async function runTranscriptionAttempt({
     const result = await transcribeViaGateway({
       tempFilePath,
       recordFileName,
+      requestId,
+      callId,
       aiGatewayUrl,
       aiGatewaySecret,
       aiGatewayTranscribePath,
@@ -909,6 +951,7 @@ async function runTranscriptionAttempt({
 async function sendProcessCall({
   processUrl,
   ingestSecret,
+  requestId,
   payload,
   timeoutMs
 }) {
@@ -918,6 +961,10 @@ async function sendProcessCall({
 
   if (isNonEmptyString(ingestSecret)) {
     headers['X-Ingest-Secret'] = ingestSecret;
+  }
+
+  if (isNonEmptyString(requestId)) {
+    headers['x-request-id'] = requestId.trim();
   }
 
   const response = await fetchWithTimeout(processUrl, {
@@ -974,6 +1021,26 @@ async function ensureTele2DedupTable(pool) {
     CREATE INDEX IF NOT EXISTS idx_tele2_polled_records_status
       ON tele2_polled_records (status)
   `);
+}
+
+async function isPhoneIgnoredPreTranscribe(pool, phone) {
+  const normalizedPhone = normalizePhone(phone);
+  if (!normalizedPhone) {
+    return false;
+  }
+
+  const result = await pool.query(
+    `
+    SELECT 1
+    FROM ignore_list
+    WHERE phone_normalized = $1
+      AND is_active = TRUE
+    LIMIT 1
+    `,
+    [normalizedPhone]
+  );
+
+  return result.rowCount > 0;
 }
 
 async function getDedupStatus(pool, recordFileName) {
@@ -1094,7 +1161,171 @@ async function finalizeDedupRecord(pool, {
 
 function shouldMarkAsSkipped(error) {
   const code = isNonEmptyString(error?.code) ? error.code.trim() : '';
-  return code === 'POLZA_EMPTY_TRANSCRIPTION' || code === 'AI_GATEWAY_EMPTY_TRANSCRIPT';
+  if (code === 'POLZA_EMPTY_TRANSCRIPTION' || code === 'AI_GATEWAY_EMPTY_TRANSCRIPT') {
+    return true;
+  }
+
+  if (code === 'T2_FILE_NOT_AUDIO') {
+    return true;
+  }
+
+  if (code === 'T2_FILE_HTTP_ERROR' && Number.isInteger(error?.statusCode) && error.statusCode === 404) {
+    return true;
+  }
+
+  return false;
+}
+
+function resolvePreTranscribeSkipReasonFromError(error) {
+  const code = isNonEmptyString(error?.code) ? error.code.trim() : '';
+
+  if (code === 'T2_FILE_NOT_AUDIO') {
+    return PRE_TRANSCRIBE_SKIP_REASONS.UNUSABLE_AUDIO_METADATA;
+  }
+
+  if (code === 'T2_FILE_HTTP_ERROR' && Number.isInteger(error?.statusCode) && error.statusCode === 404) {
+    return PRE_TRANSCRIBE_SKIP_REASONS.AUDIO_RECORD_NOT_FOUND;
+  }
+
+  return '';
+}
+
+function normalizeAiUsageInt(value, fallback = null) {
+  if (Number.isSafeInteger(value) && value >= 0) {
+    return value;
+  }
+
+  if (isNonEmptyString(value) && /^[0-9]+$/.test(value.trim())) {
+    const parsed = Number.parseInt(value.trim(), 10);
+    if (Number.isSafeInteger(parsed) && parsed >= 0) {
+      return parsed;
+    }
+  }
+
+  return fallback;
+}
+
+function normalizeAiUsageCost(value) {
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+    return Number(value.toFixed(6));
+  }
+
+  if (isNonEmptyString(value) && /^[0-9]+([.,][0-9]+)?$/.test(value.trim())) {
+    const parsed = Number.parseFloat(value.trim().replace(',', '.'));
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return Number(parsed.toFixed(6));
+    }
+  }
+
+  return null;
+}
+
+function normalizeAiUsagePayload(rawUsage = {}, fallback = {}) {
+  const usage = rawUsage && typeof rawUsage === 'object' ? rawUsage : {};
+  const defaults = fallback && typeof fallback === 'object' ? fallback : {};
+
+  return {
+    xRequestId: isNonEmptyString(usage.xRequestId)
+      ? usage.xRequestId.trim()
+      : (isNonEmptyString(defaults.xRequestId) ? defaults.xRequestId.trim() : ''),
+    callEventId: normalizeAiUsageInt(usage.callEventId, normalizeAiUsageInt(defaults.callEventId, null)),
+    callId: isNonEmptyString(usage.callId)
+      ? usage.callId.trim().slice(0, 256)
+      : (isNonEmptyString(defaults.callId) ? defaults.callId.trim().slice(0, 256) : ''),
+    operation: isNonEmptyString(usage.operation)
+      ? usage.operation.trim()
+      : (isNonEmptyString(defaults.operation) ? defaults.operation.trim() : 'transcribe'),
+    model: isNonEmptyString(usage.model)
+      ? usage.model.trim()
+      : (isNonEmptyString(defaults.model) ? defaults.model.trim() : ''),
+    provider: isNonEmptyString(usage.provider)
+      ? usage.provider.trim()
+      : (isNonEmptyString(defaults.provider) ? defaults.provider.trim() : 'polza'),
+    promptTokens: normalizeAiUsageInt(usage.promptTokens, normalizeAiUsageInt(defaults.promptTokens, null)),
+    completionTokens: normalizeAiUsageInt(
+      usage.completionTokens,
+      normalizeAiUsageInt(defaults.completionTokens, null)
+    ),
+    totalTokens: normalizeAiUsageInt(usage.totalTokens, normalizeAiUsageInt(defaults.totalTokens, null)),
+    transcriptCharsRaw: normalizeAiUsageInt(
+      usage.transcriptCharsRaw,
+      normalizeAiUsageInt(defaults.transcriptCharsRaw, null)
+    ),
+    transcriptCharsSent: normalizeAiUsageInt(
+      usage.transcriptCharsSent,
+      normalizeAiUsageInt(defaults.transcriptCharsSent, null)
+    ),
+    durationMs: normalizeAiUsageInt(usage.durationMs, normalizeAiUsageInt(defaults.durationMs, null)),
+    responseStatus: isNonEmptyString(usage.responseStatus)
+      ? usage.responseStatus.trim()
+      : (isNonEmptyString(defaults.responseStatus) ? defaults.responseStatus.trim() : 'failed'),
+    skipReason: isNonEmptyString(usage.skipReason)
+      ? usage.skipReason.trim()
+      : (isNonEmptyString(defaults.skipReason) ? defaults.skipReason.trim() : ''),
+    estimatedCostRub: normalizeAiUsageCost(usage.estimatedCostRub) ?? normalizeAiUsageCost(defaults.estimatedCostRub),
+    createdAt: isNonEmptyString(usage.createdAt)
+      ? usage.createdAt.trim()
+      : (isNonEmptyString(defaults.createdAt) ? defaults.createdAt.trim() : '')
+  };
+}
+
+async function appendAiUsageAuditSafely(pool, logger, payload) {
+  const record = normalizeAiUsagePayload(payload, {});
+
+  try {
+    await pool.query(
+      `
+      INSERT INTO ai_usage_audit (
+        x_request_id,
+        call_event_id,
+        call_id,
+        operation,
+        model,
+        provider,
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+        transcript_chars_raw,
+        transcript_chars_sent,
+        duration_ms,
+        response_status,
+        skip_reason,
+        estimated_cost_rub,
+        created_at
+      )
+      VALUES (
+        $1, $2, $3, $4, $5, $6,
+        $7, $8, $9, $10, $11, $12,
+        $13, $14, $15, COALESCE($16::timestamptz, NOW())
+      )
+      `,
+      [
+        record.xRequestId || null,
+        record.callEventId,
+        record.callId || null,
+        record.operation || 'transcribe',
+        record.model || null,
+        record.provider || null,
+        record.promptTokens,
+        record.completionTokens,
+        record.totalTokens,
+        record.transcriptCharsRaw,
+        record.transcriptCharsSent,
+        record.durationMs,
+        record.responseStatus || 'failed',
+        record.skipReason || null,
+        record.estimatedCostRub,
+        isNonEmptyString(record.createdAt) ? record.createdAt : null
+      ]
+    );
+  } catch (error) {
+    logger.warn('ai_usage_audit_write_failed', {
+      requestId: record.xRequestId,
+      callId: record.callId || '',
+      operation: record.operation || '',
+      error: serializeError(error)
+    });
+  }
 }
 
 function normalizeProcessStatus(processCallBody) {
@@ -1121,12 +1352,25 @@ async function processCandidate({
   pool,
   stats
 }) {
+  const requestId = `tele2-poll-${crypto.randomUUID()}`;
   const recordFileName = normalizeRecordFileName(record?.recordFileName);
+  const callId = recordFileName || '';
+
   if (!recordFileName) {
     stats.skipped += 1;
     logger.warn('tele2_poll_candidate_skipped', {
-      reason: 'missing_record_file_name'
+      requestId,
+      reason: PRE_TRANSCRIBE_SKIP_REASONS.MISSING_RECORD_FILE_NAME
     });
+
+    await appendAiUsageAuditSafely(pool, logger, {
+      xRequestId: requestId,
+      callId,
+      operation: 'transcribe',
+      responseStatus: 'skipped',
+      skipReason: PRE_TRANSCRIBE_SKIP_REASONS.MISSING_RECORD_FILE_NAME
+    });
+
     return;
   }
 
@@ -1139,7 +1383,15 @@ async function processCandidate({
       logger.info('tele2_poll_candidate_duplicate', {
         recordFileName,
         dedupStatus: existing.status,
+        requestId,
         dryRun: true
+      });
+      await appendAiUsageAuditSafely(pool, logger, {
+        xRequestId: requestId,
+        callId,
+        operation: 'transcribe',
+        responseStatus: 'skipped',
+        skipReason: PRE_TRANSCRIBE_SKIP_REASONS.DUPLICATE_EVENT_DRY_RUN
       });
       return;
     }
@@ -1154,7 +1406,15 @@ async function processCandidate({
       logger.info('tele2_poll_candidate_duplicate', {
         recordFileName,
         dedupStatus: lock.previousStatus,
+        requestId,
         dryRun: false
+      });
+      await appendAiUsageAuditSafely(pool, logger, {
+        xRequestId: requestId,
+        callId,
+        operation: 'transcribe',
+        responseStatus: 'skipped',
+        skipReason: PRE_TRANSCRIBE_SKIP_REASONS.DUPLICATE_EVENT
       });
       return;
     }
@@ -1172,7 +1432,20 @@ async function processCandidate({
     stats.skipped += 1;
     logger.warn('tele2_poll_candidate_skipped', {
       recordFileName,
-      reason: !phone ? 'missing_phone' : 'missing_call_datetime'
+      requestId,
+      reason: !phone
+        ? PRE_TRANSCRIBE_SKIP_REASONS.UNUSABLE_METADATA_MISSING_PHONE
+        : PRE_TRANSCRIBE_SKIP_REASONS.UNUSABLE_METADATA_MISSING_CALL_DATETIME
+    });
+
+    await appendAiUsageAuditSafely(pool, logger, {
+      xRequestId: requestId,
+      callId,
+      operation: 'transcribe',
+      responseStatus: 'skipped',
+      skipReason: !phone
+        ? PRE_TRANSCRIBE_SKIP_REASONS.UNUSABLE_METADATA_MISSING_PHONE
+        : PRE_TRANSCRIBE_SKIP_REASONS.UNUSABLE_METADATA_MISSING_CALL_DATETIME
     });
 
     if (dedupReserved) {
@@ -1191,24 +1464,69 @@ async function processCandidate({
     return;
   }
 
+  if (await isPhoneIgnoredPreTranscribe(pool, phone)) {
+    stats.skipped += 1;
+    stats.ignored += 1;
+
+    logger.info('tele2_poll_candidate_skipped', {
+      recordFileName,
+      requestId,
+      reason: PRE_TRANSCRIBE_SKIP_REASONS.INTERNAL_OR_IGNORED_PHONE
+    });
+
+    await appendAiUsageAuditSafely(pool, logger, {
+      xRequestId: requestId,
+      callId,
+      operation: 'transcribe',
+      responseStatus: 'skipped',
+      skipReason: PRE_TRANSCRIBE_SKIP_REASONS.INTERNAL_OR_IGNORED_PHONE
+    });
+
+    if (dedupReserved) {
+      await finalizeDedupRecord(pool, {
+        recordFileName,
+        status: 'ignored',
+        phoneRaw: phone,
+        callDateTimeRaw: callDateTime,
+        processStatus: 'ignored',
+        errorCode: 'INTERNAL_OR_IGNORED_PHONE',
+        errorMessage: 'Phone is in ignore_list and skipped before transcription'
+      });
+    }
+
+    return;
+  }
+
   const conversationGate = evaluateConversationGate(record);
   if (!conversationGate.shouldAnalyze) {
     stats.skipped += 1;
 
-    if (conversationGate.reason === 'missed_call') {
+    if (
+      conversationGate.reason === PRE_TRANSCRIBE_SKIP_REASONS.MISSED_CALL ||
+      conversationGate.reason === PRE_TRANSCRIBE_SKIP_REASONS.OUTGOING_UNANSWERED
+    ) {
       stats.skippedMissed += 1;
-    } else if (conversationGate.reason === 'short_conversation') {
+    } else if (conversationGate.reason === PRE_TRANSCRIBE_SKIP_REASONS.SHORT_CONVERSATION_LE_10S) {
       stats.skippedShortConversation += 1;
-    } else if (conversationGate.reason === 'missing_conversation_duration') {
+    } else if (conversationGate.reason === PRE_TRANSCRIBE_SKIP_REASONS.MISSING_CONVERSATION_DURATION) {
       stats.skippedMissingDuration += 1;
     }
 
     logger.info('tele2_poll_candidate_skipped', {
       recordFileName,
+      requestId,
       reason: conversationGate.reason,
       durationSeconds: conversationGate.durationSeconds,
       durationSourceField: conversationGate.durationSourceField,
       thresholdSeconds: MIN_CONVERSATION_DURATION_SECONDS
+    });
+
+    await appendAiUsageAuditSafely(pool, logger, {
+      xRequestId: requestId,
+      callId,
+      operation: 'transcribe',
+      responseStatus: 'skipped',
+      skipReason: conversationGate.reason
     });
 
     if (dedupReserved) {
@@ -1248,9 +1566,18 @@ async function processCandidate({
       stats.skipped += 1;
       logger.warn('tele2_poll_candidate_skipped', {
         recordFileName,
-        reason: 'audio_too_small',
+        requestId,
+        reason: PRE_TRANSCRIBE_SKIP_REASONS.AUDIO_TOO_SMALL,
         audioBytes: audio.sizeBytes,
         minAudioBytes: config.minAudioBytes
+      });
+
+      await appendAiUsageAuditSafely(pool, logger, {
+        xRequestId: requestId,
+        callId,
+        operation: 'transcribe',
+        responseStatus: 'skipped',
+        skipReason: PRE_TRANSCRIBE_SKIP_REASONS.AUDIO_TOO_SMALL
       });
 
       if (dedupReserved) {
@@ -1270,6 +1597,8 @@ async function processCandidate({
     const primaryAttempt = await runTranscriptionAttempt({
       tempFilePath: audio.tempFilePath,
       recordFileName,
+      requestId,
+      callId,
       aiGatewayUrl: config.aiGatewayUrl,
       aiGatewaySecret: config.aiGatewaySecret,
       aiGatewayTranscribePath: config.aiGatewayTranscribePath,
@@ -1287,10 +1616,38 @@ async function processCandidate({
         primaryError.statusCode = primaryAttempt.outcome.statusCode;
       }
 
+      await appendAiUsageAuditSafely(
+        pool,
+        logger,
+        normalizeAiUsagePayload(primaryError.aiUsage, {
+          xRequestId: requestId,
+          callId,
+          operation: 'transcribe',
+          model: primaryAttempt.outcome.model,
+          provider: 'polza',
+          responseStatus: 'failed',
+          durationMs: primaryAttempt.outcome.durationMs
+        })
+      );
+
       throw primaryError;
     }
 
     const transcription = primaryAttempt.result;
+
+    await appendAiUsageAuditSafely(
+      pool,
+      logger,
+      normalizeAiUsagePayload(transcription.aiUsage, {
+        xRequestId: requestId,
+        callId,
+        operation: 'transcribe',
+        model: transcription.model || primaryAttempt.outcome.model,
+        provider: 'polza',
+        responseStatus: 'success',
+        durationMs: primaryAttempt.outcome.durationMs
+      })
+    );
 
     stats.transcribed += 1;
     logger.info('tele2_poll_candidate_transcribed', {
@@ -1307,6 +1664,8 @@ async function processCandidate({
       compareAttempt = await runTranscriptionAttempt({
         tempFilePath: audio.tempFilePath,
         recordFileName,
+        requestId,
+        callId,
         aiGatewayUrl: config.aiGatewayUrl,
         aiGatewaySecret: config.aiGatewaySecret,
         aiGatewayTranscribePath: config.aiGatewayTranscribePath,
@@ -1333,6 +1692,36 @@ async function processCandidate({
         compareErrorCode: compareAttempt.outcome.errorCode || '',
         phoneLast4: phoneLast4(phone)
       });
+
+      if (compareAttempt.ok) {
+        await appendAiUsageAuditSafely(
+          pool,
+          logger,
+          normalizeAiUsagePayload(compareAttempt.result.aiUsage, {
+            xRequestId: requestId,
+            callId,
+            operation: 'transcribe',
+            model: compareAttempt.outcome.model,
+            provider: 'polza',
+            responseStatus: 'success',
+            durationMs: compareAttempt.outcome.durationMs
+          })
+        );
+      } else {
+        await appendAiUsageAuditSafely(
+          pool,
+          logger,
+          normalizeAiUsagePayload(compareAttempt.error?.aiUsage, {
+            xRequestId: requestId,
+            callId,
+            operation: 'transcribe',
+            model: compareAttempt.outcome.model,
+            provider: 'polza',
+            responseStatus: 'failed',
+            durationMs: compareAttempt.outcome.durationMs
+          })
+        );
+      }
     }
 
     if (config.dryRun) {
@@ -1359,6 +1748,7 @@ async function processCandidate({
     const processCallResult = await sendProcessCall({
       processUrl: config.processUrl,
       ingestSecret: config.ingestSecret,
+      requestId,
       payload: processCallPayload,
       timeoutMs: config.timeoutMs
     });
@@ -1383,6 +1773,7 @@ async function processCandidate({
 
     logger.info('tele2_poll_candidate_processed', {
       recordFileName,
+      requestId,
       processStatus,
       processStatusCode: processCallResult.statusCode,
       phoneLast4: phoneLast4(phone),
@@ -1400,11 +1791,23 @@ async function processCandidate({
 
     logger.error('tele2_poll_candidate_failed', {
       recordFileName,
+      requestId,
       errorCode,
       errorMessage,
       phoneLast4: phoneLast4(phone),
       error: serializeError(error)
     });
+
+    const preTranscribeSkipReason = resolvePreTranscribeSkipReasonFromError(error);
+    if (preTranscribeSkipReason) {
+      await appendAiUsageAuditSafely(pool, logger, {
+        xRequestId: requestId,
+        callId,
+        operation: 'transcribe',
+        responseStatus: 'skipped',
+        skipReason: preTranscribeSkipReason
+      });
+    }
 
     if (dedupReserved) {
       await finalizeDedupRecord(pool, {
@@ -1552,8 +1955,8 @@ Options:
   --fetch-limit <int>                Tele2 info page size
   --max-candidates <int>             Max unique records to process from fetched list
   --min-audio-bytes <int>            Skip too-small audio files
-                                     Calls are analyzed only when conversation duration > 5 seconds
-                                     and call is not marked as missed (based on Tele2 metadata).
+                                     Calls are analyzed only when conversation duration > 10 seconds
+                                     and call is not marked as unanswered/missed by Tele2 metadata.
   --timeout-ms <int>                 HTTP timeout in ms
   --retry-failed / --no-retry-failed Retry records with failed dedup status
   --timezone-offset <+HH:MM|-HH:MM>  Offset for Tele2 info window

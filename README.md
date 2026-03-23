@@ -23,7 +23,7 @@ Node.js/Express сервис для обработки телефонных зв
 
 - `main app` (`src/server.js` + application services): ingress, orchestration, Telegram delivery, health endpoints
 - `ai-gateway` (`ai-gateway/`): отдельный AI boundary и provider routing
-- PostgreSQL: runtime source of truth для call events, служебного состояния и offset'ов
+- PostgreSQL (`t2-postgres`, self-hosted on same VM): runtime source of truth для call events, служебного состояния и offset'ов
 - Telegram Bot API: доставка summary и callback-driven выдача transcript `.txt`
 - container-to-container routing: main app и `ai-gateway` работают как отдельные контейнеры в одной Docker network
 
@@ -49,6 +49,7 @@ Node.js/Express сервис для обработки телефонных зв
 - `DEPLOY_PROGRESS.md` - operational журнал rollout/проверок
 - `.env.example` - переменные окружения и безопасные дефолты
 - `ops/*` - infrastructure/operations шаблоны (systemd, logrotate и др.)
+- `ops/POSTGRES_RESTORE_RUNBOOK.md` - восстановление self-hosted PostgreSQL из backup dump
 
 ## Local run / smoke test
 
@@ -70,7 +71,22 @@ npm run dev
 - `npm run smoke:employee-directory`
 - `npm run acceptance:real-calls`
 - `npm run audit:call-meta -- --hours 24 --source tele2_poll_once`
+- `npm run audit:ai-usage -- --hours 24 --source tele2_poll_once`
 - `npm run admin:employee-directory -- lookup --phone "+79991234567"`
+
+## Production DB ops (self-hosted PostgreSQL)
+
+- runtime DB backup timer: `t2-postgres-backup.timer` (daily)
+- manual backup run: `sudo systemctl start t2-postgres-backup.service`
+- restore procedure: `ops/POSTGRES_RESTORE_RUNBOOK.md`
+
+## Cost observability ops
+
+- AI usage audit report (tokens + money): `npm run audit:ai-usage -- --hours 24 --source tele2_poll_once`
+- `estimated_cost_rub` source priority:
+  - provider usage fields (`usage.cost_rub` / `usage.cost`) for supported operations
+  - fallback analyze pricing env (`POLZA_ANALYZE_INPUT_RUB_PER_1K_TOKENS`, `POLZA_ANALYZE_OUTPUT_RUB_PER_1K_TOKENS`) when provider cost is unavailable
+- `NULL` cost is expected where provider cost and fallback inputs are both unavailable; token telemetry remains intact
 
 ## Что не входит в текущую архитектуру
 

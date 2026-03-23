@@ -369,6 +369,177 @@ function stringFromUnknown(value) {
   return '';
 }
 
+function normalizeRequestId(value) {
+  if (!isNonEmptyString(value)) {
+    return '';
+  }
+
+  return value.trim().slice(0, 128);
+}
+
+function normalizeCallEventId(value) {
+  if (Number.isSafeInteger(value) && value > 0) {
+    return value;
+  }
+
+  if (isNonEmptyString(value) && /^[0-9]+$/.test(value.trim())) {
+    const parsed = Number.parseInt(value.trim(), 10);
+    if (Number.isSafeInteger(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+function normalizeTokenCount(value) {
+  if (Number.isSafeInteger(value) && value >= 0) {
+    return value;
+  }
+
+  if (isNonEmptyString(value) && /^[0-9]+$/.test(value.trim())) {
+    const parsed = Number.parseInt(value.trim(), 10);
+    if (Number.isSafeInteger(parsed) && parsed >= 0) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+function toRoundedNumber(value, digits = 6) {
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+
+  return Number(value.toFixed(digits));
+}
+
+function normalizeEstimatedCostRub(value) {
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+    return toRoundedNumber(value, 6);
+  }
+
+  if (isNonEmptyString(value) && /^[0-9]+([.,][0-9]+)?$/.test(value.trim())) {
+    const parsed = Number.parseFloat(value.trim().replace(',', '.'));
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return toRoundedNumber(parsed, 6);
+    }
+  }
+
+  return null;
+}
+
+function resolveTotalTokens(promptTokens, completionTokens, totalTokensRaw) {
+  const totalTokens = normalizeTokenCount(totalTokensRaw);
+  if (Number.isInteger(totalTokens)) {
+    return totalTokens;
+  }
+
+  if (Number.isInteger(promptTokens) && Number.isInteger(completionTokens)) {
+    return promptTokens + completionTokens;
+  }
+
+  return null;
+}
+
+function extractCompletionUsage(completion) {
+  const usage = completion?.usage || {};
+  const promptTokens = normalizeTokenCount(usage.prompt_tokens);
+  const completionTokens = normalizeTokenCount(usage.completion_tokens);
+  const totalTokens = resolveTotalTokens(promptTokens, completionTokens, usage.total_tokens);
+  const costRub = normalizeEstimatedCostRub(usage.cost_rub ?? usage.cost);
+
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens,
+    costRub
+  };
+}
+
+function buildAnalyzeEstimatedCostRub({ promptTokens, completionTokens, pricing }) {
+  const inputRate = Number.isFinite(pricing?.analyzeInputRubPer1kTokens)
+    ? Number(pricing.analyzeInputRubPer1kTokens)
+    : null;
+  const outputRate = Number.isFinite(pricing?.analyzeOutputRubPer1kTokens)
+    ? Number(pricing.analyzeOutputRubPer1kTokens)
+    : null;
+
+  if (inputRate === null || outputRate === null) {
+    return null;
+  }
+
+  if (!Number.isInteger(promptTokens) || !Number.isInteger(completionTokens)) {
+    return null;
+  }
+
+  const costRub = (promptTokens / 1000) * inputRate + (completionTokens / 1000) * outputRate;
+  return toRoundedNumber(costRub, 6);
+}
+
+function getTranscriptChars(value) {
+  if (!isNonEmptyString(value)) {
+    return null;
+  }
+
+  return value.trim().length;
+}
+
+function normalizeDurationMs(value) {
+  if (!Number.isFinite(value) || value < 0) {
+    return null;
+  }
+
+  return Math.max(0, Math.round(value));
+}
+
+function buildAiUsageEvent({
+  payload,
+  operation,
+  model,
+  promptTokens = null,
+  completionTokens = null,
+  totalTokens = null,
+  transcriptCharsRaw = null,
+  transcriptCharsSent = null,
+  durationMs = null,
+  responseStatus,
+  skipReason = '',
+  estimatedCostRub = null
+}) {
+  return {
+    xRequestId: normalizeRequestId(payload?.requestId),
+    callEventId: normalizeCallEventId(payload?.callEventId),
+    callId: isNonEmptyString(payload?.callId) ? payload.callId.trim().slice(0, 256) : '',
+    operation,
+    model: isNonEmptyString(model) ? model.trim() : '',
+    provider: 'polza',
+    promptTokens: normalizeTokenCount(promptTokens),
+    completionTokens: normalizeTokenCount(completionTokens),
+    totalTokens: resolveTotalTokens(
+      normalizeTokenCount(promptTokens),
+      normalizeTokenCount(completionTokens),
+      totalTokens
+    ),
+    transcriptCharsRaw: normalizeTokenCount(transcriptCharsRaw),
+    transcriptCharsSent: normalizeTokenCount(transcriptCharsSent),
+    durationMs: normalizeDurationMs(durationMs),
+    responseStatus: isNonEmptyString(responseStatus) ? responseStatus.trim() : 'failed',
+    skipReason: isNonEmptyString(skipReason) ? skipReason.trim().slice(0, 200) : '',
+    estimatedCostRub: Number.isFinite(estimatedCostRub) ? toRoundedNumber(estimatedCostRub, 6) : null,
+    createdAt: new Date().toISOString()
+  };
+}
+
+function attachAiUsage(error, aiUsage) {
+  if (error instanceof Error && aiUsage && typeof aiUsage === 'object') {
+    error.aiUsage = aiUsage;
+  }
+
+  return error;
+}
+
 function sanitizePolzaErrorMessage(error) {
   const status = Number.isInteger(error?.status) ? error.status : null;
 
@@ -898,7 +1069,15 @@ function createPolzaClient(config) {
       : 'openai/gpt-4o-transcribe',
     transcribeCandidateModel: isNonEmptyString(config.transcribeCandidateModel)
       ? config.transcribeCandidateModel.trim()
-      : ''
+      : '',
+    pricing: {
+      analyzeInputRubPer1kTokens: Number.isFinite(config?.pricing?.analyzeInputRubPer1kTokens)
+        ? Number(config.pricing.analyzeInputRubPer1kTokens)
+        : null,
+      analyzeOutputRubPer1kTokens: Number.isFinite(config?.pricing?.analyzeOutputRubPer1kTokens)
+        ? Number(config.pricing.analyzeOutputRubPer1kTokens)
+        : null
+    }
   };
 }
 
@@ -1072,9 +1251,12 @@ function buildUserPrompt(payload) {
 }
 
 function createOpenAIAnalyzer(config, logger) {
-  const { client, analyzeModel } = createPolzaClient(config);
+  const { client, analyzeModel, pricing } = createPolzaClient(config);
 
   return async function analyzeCall(payload) {
+    const startedAt = Date.now();
+    const transcriptCharsRaw = getTranscriptChars(payload?.transcript);
+    const transcriptCharsSent = transcriptCharsRaw;
     let completion;
 
     try {
@@ -1101,46 +1283,124 @@ function createOpenAIAnalyzer(config, logger) {
         ]
       });
     } catch (error) {
-      throw new OpenAIClientError(
+      const durationMs = Date.now() - startedAt;
+      const aiUsage = buildAiUsageEvent({
+        payload,
+        operation: 'analyze',
+        model: analyzeModel,
+        transcriptCharsRaw,
+        transcriptCharsSent,
+        durationMs,
+        responseStatus: 'failed'
+      });
+
+      logger.warn('ai_usage_analyze', aiUsage);
+
+      throw attachAiUsage(new OpenAIClientError(
         sanitizePolzaErrorMessage(error),
         502,
         'POLZA_REQUEST_FAILED'
-      );
+      ), aiUsage);
     }
+
+    const usage = extractCompletionUsage(completion);
+    const durationMs = Date.now() - startedAt;
+    const estimatedCostRub = usage.costRub ?? buildAnalyzeEstimatedCostRub({
+      promptTokens: usage.promptTokens,
+      completionTokens: usage.completionTokens,
+      pricing
+    });
 
     const modelContent = completion?.choices?.[0]?.message?.content;
     if (!isNonEmptyString(modelContent)) {
-      throw new OpenAIClientError(
+      const aiUsage = buildAiUsageEvent({
+        payload,
+        operation: 'analyze',
+        model: analyzeModel,
+        promptTokens: usage.promptTokens,
+        completionTokens: usage.completionTokens,
+        totalTokens: usage.totalTokens,
+        transcriptCharsRaw,
+        transcriptCharsSent,
+        durationMs,
+        responseStatus: 'failed',
+        estimatedCostRub
+      });
+
+      logger.warn('ai_usage_analyze', aiUsage);
+
+      throw attachAiUsage(new OpenAIClientError(
         'Polza returned empty response content',
         502,
         'POLZA_EMPTY_RESPONSE'
-      );
+      ), aiUsage);
     }
 
     let parsedJson;
     try {
       parsedJson = JSON.parse(modelContent);
     } catch (error) {
-      throw new OpenAIClientError(
+      const aiUsage = buildAiUsageEvent({
+        payload,
+        operation: 'analyze',
+        model: analyzeModel,
+        promptTokens: usage.promptTokens,
+        completionTokens: usage.completionTokens,
+        totalTokens: usage.totalTokens,
+        transcriptCharsRaw,
+        transcriptCharsSent,
+        durationMs,
+        responseStatus: 'failed',
+        estimatedCostRub
+      });
+
+      logger.warn('ai_usage_analyze', aiUsage);
+
+      throw attachAiUsage(new OpenAIClientError(
         'Polza returned invalid JSON that cannot be parsed',
         502,
         'POLZA_INVALID_JSON_PARSE'
-      );
+      ), aiUsage);
     }
 
     const normalized = normalizeAndValidateAnalysis(parsedJson, {
       transcript: payload.transcript
     });
 
+    const aiUsage = buildAiUsageEvent({
+      payload,
+      operation: 'analyze',
+      model: analyzeModel,
+      promptTokens: usage.promptTokens,
+      completionTokens: usage.completionTokens,
+      totalTokens: usage.totalTokens,
+      transcriptCharsRaw,
+      transcriptCharsSent,
+      durationMs,
+      responseStatus: 'success',
+      estimatedCostRub
+    });
+
+    logger.info('ai_usage_analyze', aiUsage);
+
     logger.info('polza_analysis_success', {
       requestId: payload.requestId || '',
+      callEventId: normalizeCallEventId(payload?.callEventId),
       model: analyzeModel,
       category: normalized.category,
       priority: normalized.priority,
-      tagsCount: normalized.tags.length
+      tagsCount: normalized.tags.length,
+      promptTokens: aiUsage.promptTokens,
+      completionTokens: aiUsage.completionTokens,
+      totalTokens: aiUsage.totalTokens,
+      estimatedCostRub: aiUsage.estimatedCostRub,
+      durationMs: aiUsage.durationMs
     });
 
-    return normalized;
+    return {
+      ...normalized,
+      aiUsage
+    };
   };
 }
 
@@ -1169,6 +1429,7 @@ function createOpenAITranscriber(config, logger) {
   }
 
   return async function transcribeAudio(payload) {
+    const startedAt = Date.now();
     const audioBuffer = resolveAudioBuffer(payload);
     const effectiveModel = resolveTranscribeModel(payload?.transcribeModel);
     const extension = resolveTranscriptionFileExtension({
@@ -1185,11 +1446,24 @@ function createOpenAITranscriber(config, logger) {
         response_format: 'text'
       });
     } catch (error) {
-      throw new OpenAIClientError(
+      const aiUsage = buildAiUsageEvent({
+        payload,
+        operation: 'transcribe',
+        model: effectiveModel,
+        durationMs: Date.now() - startedAt,
+        responseStatus: 'failed'
+      });
+
+      logger.warn('ai_usage_transcribe', {
+        ...aiUsage,
+        audioBytes: audioBuffer.length
+      });
+
+      throw attachAiUsage(new OpenAIClientError(
         sanitizePolzaErrorMessage(error),
         502,
         'POLZA_TRANSCRIBE_FAILED'
-      );
+      ), aiUsage);
     } finally {
       safeRemoveFile(tempFilePath);
     }
@@ -1198,25 +1472,68 @@ function createOpenAITranscriber(config, logger) {
       typeof response === 'string' ? response : response?.text
     );
 
+    const usage = extractCompletionUsage(response);
+    const durationMs = Date.now() - startedAt;
+
     if (!isNonEmptyString(transcript)) {
-      throw new OpenAIClientError(
+      const aiUsage = buildAiUsageEvent({
+        payload,
+        operation: 'transcribe',
+        model: effectiveModel,
+        promptTokens: usage.promptTokens,
+        completionTokens: usage.completionTokens,
+        totalTokens: usage.totalTokens,
+        durationMs,
+        responseStatus: 'failed',
+        estimatedCostRub: usage.costRub
+      });
+
+      logger.warn('ai_usage_transcribe', {
+        ...aiUsage,
+        audioBytes: audioBuffer.length
+      });
+
+      throw attachAiUsage(new OpenAIClientError(
         'Polza returned empty transcription',
         502,
         'POLZA_EMPTY_TRANSCRIPTION'
-      );
+      ), aiUsage);
     }
+
+    const aiUsage = buildAiUsageEvent({
+      payload,
+      operation: 'transcribe',
+      model: effectiveModel,
+      promptTokens: usage.promptTokens,
+      completionTokens: usage.completionTokens,
+      totalTokens: usage.totalTokens,
+      durationMs,
+      responseStatus: 'success',
+      estimatedCostRub: usage.costRub
+    });
+
+    logger.info('ai_usage_transcribe', {
+      ...aiUsage,
+      audioBytes: audioBuffer.length
+    });
 
     logger.info('polza_transcription_success', {
       requestId: payload?.requestId || '',
       transcriptLength: transcript.length,
       model: effectiveModel,
-      audioBytes: audioBuffer.length
+      audioBytes: audioBuffer.length,
+      promptTokens: aiUsage.promptTokens,
+      completionTokens: aiUsage.completionTokens,
+      totalTokens: aiUsage.totalTokens,
+      estimatedCostRub: aiUsage.estimatedCostRub,
+      durationMs: aiUsage.durationMs
     });
 
     return {
       transcript,
       model: effectiveModel,
-      audioBytes: audioBuffer.length
+      audioBytes: audioBuffer.length,
+      aiUsage
     };
   };
 }

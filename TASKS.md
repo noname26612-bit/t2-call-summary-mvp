@@ -40,6 +40,134 @@ Current status:
     - [x] direct `POST /analyze` 4/4 `200`
     - [x] no `AI_GATEWAY_TIMEOUT` / `AI_GATEWAY_UPSTREAM_ERROR` / `POLZA_REQUEST_FAILED` in rollout log window
 
+## Completed workstream (Self-hosted PostgreSQL cutover, `2026-03-23`)
+
+Scope and status:
+
+- [x] Managed PostgreSQL removed from runtime architecture
+- [x] Self-hosted PostgreSQL deployed on same production VM (`t2-postgres`, `postgres:17-alpine`)
+- [x] Persistent DB volume configured (`t2-postgres-data`)
+- [x] Data restored from managed pre-cutover dump
+- [x] Main app runtime switched to `DB_HOST=t2-postgres`, `DB_PORT=5432`
+- [x] Migrations executed on self-hosted DB (including `006_ai_usage_audit.sql`)
+- [x] Backup automation added:
+  - [x] `scripts/backupSelfHostedPostgres.sh`
+  - [x] `ops/systemd/t2-postgres-backup.service`
+  - [x] `ops/systemd/t2-postgres-backup.timer`
+- [x] Restore runbook added:
+  - [x] `ops/POSTGRES_RESTORE_RUNBOOK.md`
+
+Verification steps:
+
+- [x] backup artifacts exist:
+  - [x] `/opt/t2-call-summary/backups/managed/managed_pre_cutover_live_20260323T110231Z.dump`
+  - [x] `/opt/t2-call-summary/backups/managed/managed_pre_cutover_final_20260323T110236Z.dump`
+- [x] app health after cutover:
+  - [x] `GET /healthz` returns `database=ok`
+  - [x] app runtime DB points to self-hosted PostgreSQL 17 (`inet_server_addr=172.18.0.4`)
+- [x] data sanity on self-hosted DB:
+  - [x] core table row counts present
+  - [x] schema migrations include `006_ai_usage_audit.sql`
+- [x] restart resilience:
+  - [x] `t2-postgres` and `t2-call-summary` recover to `healthy` after restart
+- [x] backup timer verification:
+  - [x] `t2-postgres-backup.timer` enabled/active
+  - [x] manual `t2-postgres-backup.service` run succeeded with new dump file
+
+## Completed workstream (Cost observability + AI skip-layer, `2026-03-23`)
+
+Scope and status:
+
+- [x] Added structured AI usage telemetry for production paths:
+  - [x] `tele2 poller -> ai-gateway /transcribe`
+  - [x] `main app -> ai-gateway /analyze`
+- [x] Added correlation fields (`x-request-id`, `callEventId/callId`) for end-to-end tracing
+- [x] Added DB audit table via schema-only migration:
+  - [x] `migrations/006_ai_usage_audit.sql`
+- [x] Added conservative skip-layer before transcribe:
+  - [x] outgoing unanswered
+  - [x] call duration `<= 10 sec`
+  - [x] duplicate/already seen event
+  - [x] internal/ignored phone
+  - [x] audio too small / unusable audio metadata
+- [x] Added conservative skip-layer after transcribe, before analyze:
+  - [x] internal/ignored phone
+  - [x] duplicate/already processed call
+  - [x] no speech/noise transcript
+  - [x] service phrase only transcript
+  - [x] low informative transcript
+  - [x] low transcript quality gate
+- [x] Added manual aggregation report:
+  - [x] `npm run audit:ai-usage -- --hours 24 --source tele2_poll_once`
+
+Acceptance criteria:
+
+- [x] per AI invocation telemetry captures (when available): `x-request-id`, provider/model, tokens, duration, response status, `estimated_cost_rub`
+- [x] skipped paths capture `response_status=skipped` + unified `skip_reason`
+- [x] no business table refactor/regression in production schema
+- [x] report covers:
+  - [x] daily average cost
+  - [x] average/p50/p95 tokens
+  - [x] skipped counts by reason
+  - [x] calls with `>1` AI invocation
+  - [x] path mix (`0 AI`, `transcribe-only`, `transcribe+analyze`, `analyze-only`)
+
+Verification steps:
+
+- [x] migration and syntax checks passed for changed files
+- [x] pre-transcribe skip verification (mock Tele2 poll run on production VM):
+  - [x] `outgoing_unanswered` skipped before transcribe
+  - [x] `short_conversation_le_10s` skipped before transcribe
+  - [x] `internal_or_ignored_phone` skipped before transcribe
+  - [x] `audio_too_small` skipped before transcribe
+  - [x] `unusable_audio_metadata` skipped before transcribe
+  - [x] `duplicate_event` skipped before transcribe
+- [x] post-transcribe/pre-analyze skip verification (`/api/process-call` smoke):
+  - [x] `empty_transcript`
+  - [x] `internal_or_ignored_phone`
+  - [x] `no_speech_or_noise`
+  - [x] `service_phrase_only`
+  - [x] `low_informative_content`
+  - [x] `low_transcript_quality`
+  - [x] `duplicate_or_already_processed`
+- [x] valid call still passes full flow (`processed`, `telegram.status=sent`)
+- [x] `ai_usage_audit` populated with both skip stages and analyze success rows
+- [x] `npm run audit:ai-usage -- --hours 24` returns non-empty metrics on production data
+
+## Completed final production tail pass (Managed PostgreSQL billing tail + estimated money telemetry, `2026-03-23`)
+
+Scope and status:
+
+- [x] Managed PostgreSQL billing tail closed
+  - [x] confirmed managed cluster existed before tail pass (`t2-prod-pg`, `c9q80qaoj8fmrrac9kgr`)
+  - [x] executed final deletion of managed cluster via `yc managed-postgresql cluster delete --name t2-prod-pg`
+  - [x] verified absence after deletion:
+    - [x] `yc managed-postgresql cluster list` is empty
+    - [x] `yc managed-postgresql cluster get --name t2-prod-pg` returns `not found`
+- [x] Production runtime dependency proof remains self-hosted PostgreSQL only
+  - [x] active main app env uses `DB_HOST=t2-postgres`, `DB_PORT=5432`
+  - [x] live app DB identity shows self-hosted endpoint (`inet_server_addr=172.18.0.4/32`, port `5432`)
+  - [x] health remains green after managed cluster deletion (`/healthz` main + gateway)
+  - [x] fresh call writes continue to self-hosted DB (`call_events` ids `295`, `296`)
+- [x] Backup safety before irreversible delete
+  - [x] fresh self-hosted backup created: `self_hosted_ats_call_summary_20260323T120741Z.dump`
+  - [x] managed pre-cutover dumps preserved for historical rollback evidence
+- [x] `estimated_cost_rub` money telemetry enabled in production runtime
+  - [x] ai-gateway now reads provider `usage.cost_rub` / `usage.cost` and maps to `estimatedCostRub`
+  - [x] analyze fallback pricing env set in production `gateway.env`:
+    - [x] `POLZA_ANALYZE_INPUT_RUB_PER_1K_TOKENS=0.023963125`
+    - [x] `POLZA_ANALYZE_OUTPUT_RUB_PER_1K_TOKENS=0.191705`
+  - [x] startup log confirms pricing env pickup (`analyzeInputRubPer1kTokens`, `analyzeOutputRubPer1kTokens`)
+  - [x] fresh production rows contain non-null money estimate:
+    - [x] `x-request-id=prod-pass-cost-20260323-001` (`estimated_cost_rub=0.480844`)
+    - [x] `x-request-id=prod-pass-cost-20260323-002` (`estimated_cost_rub=0.348136`)
+- [x] Report path proves money aggregates are live
+  - [x] `npm run audit:ai-usage -- --hours 24 --source api_process_call` includes:
+    - [x] average cost per processed call
+    - [x] per-operation estimated cost totals
+    - [x] rows-with-null-cost share (explicitly visible)
+    - [x] token metrics (avg/p50/p95) unchanged
+
 ## Completed workstream (Dialog reconstruction + employee phone directory, `2026-03-17`)
 
 Scope and status:

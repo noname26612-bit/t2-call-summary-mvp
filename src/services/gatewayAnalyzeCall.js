@@ -4,11 +4,14 @@ const {
 } = require('./analysisNormalizer');
 
 class GatewayAnalyzeError extends Error {
-  constructor(message, statusCode = 502, code = 'AI_GATEWAY_ANALYZE_FAILED') {
+  constructor(message, statusCode = 502, code = 'AI_GATEWAY_ANALYZE_FAILED', aiUsage = null) {
     super(message);
     this.name = 'GatewayAnalyzeError';
     this.statusCode = statusCode;
     this.code = code;
+    if (aiUsage && typeof aiUsage === 'object') {
+      this.aiUsage = aiUsage;
+    }
   }
 }
 
@@ -59,6 +62,101 @@ function normalizeEmployeeHint(employee) {
     employeeName,
     employeeTitle
   };
+}
+
+function normalizeAiUsage(rawUsage) {
+  if (!rawUsage || typeof rawUsage !== 'object' || Array.isArray(rawUsage)) {
+    return null;
+  }
+
+  const normalized = {};
+
+  const xRequestId = normalizeOptionalString(rawUsage.xRequestId);
+  if (xRequestId) {
+    normalized.xRequestId = xRequestId;
+  }
+
+  const callEventIdRaw = rawUsage.callEventId;
+  if (Number.isSafeInteger(callEventIdRaw) && callEventIdRaw > 0) {
+    normalized.callEventId = callEventIdRaw;
+  } else if (isNonEmptyString(callEventIdRaw) && /^[0-9]+$/.test(callEventIdRaw.trim())) {
+    const parsed = Number.parseInt(callEventIdRaw.trim(), 10);
+    if (Number.isSafeInteger(parsed) && parsed > 0) {
+      normalized.callEventId = parsed;
+    }
+  }
+
+  const callId = normalizeOptionalString(rawUsage.callId);
+  if (callId) {
+    normalized.callId = callId.slice(0, 256);
+  }
+
+  const operation = normalizeOptionalString(rawUsage.operation);
+  if (operation) {
+    normalized.operation = operation;
+  }
+
+  const model = normalizeOptionalString(rawUsage.model);
+  if (model) {
+    normalized.model = model;
+  }
+
+  const provider = normalizeOptionalString(rawUsage.provider);
+  if (provider) {
+    normalized.provider = provider;
+  }
+
+  const responseStatus = normalizeOptionalString(rawUsage.responseStatus);
+  if (responseStatus) {
+    normalized.responseStatus = responseStatus;
+  }
+
+  const skipReason = normalizeOptionalString(rawUsage.skipReason);
+  if (skipReason) {
+    normalized.skipReason = skipReason;
+  }
+
+  const createdAt = normalizeOptionalString(rawUsage.createdAt);
+  if (createdAt) {
+    normalized.createdAt = createdAt;
+  }
+
+  const numericFields = [
+    ['promptTokens', rawUsage.promptTokens],
+    ['completionTokens', rawUsage.completionTokens],
+    ['totalTokens', rawUsage.totalTokens],
+    ['transcriptCharsRaw', rawUsage.transcriptCharsRaw],
+    ['transcriptCharsSent', rawUsage.transcriptCharsSent],
+    ['durationMs', rawUsage.durationMs]
+  ];
+
+  for (const [field, value] of numericFields) {
+    if (Number.isSafeInteger(value) && value >= 0) {
+      normalized[field] = value;
+      continue;
+    }
+
+    if (isNonEmptyString(value) && /^[0-9]+$/.test(value.trim())) {
+      const parsed = Number.parseInt(value.trim(), 10);
+      if (Number.isSafeInteger(parsed) && parsed >= 0) {
+        normalized[field] = parsed;
+      }
+    }
+  }
+
+  if (typeof rawUsage.estimatedCostRub === 'number' && Number.isFinite(rawUsage.estimatedCostRub)) {
+    normalized.estimatedCostRub = Number(rawUsage.estimatedCostRub.toFixed(6));
+  } else if (
+    isNonEmptyString(rawUsage.estimatedCostRub) &&
+    /^[0-9]+([.,][0-9]+)?$/.test(rawUsage.estimatedCostRub.trim())
+  ) {
+    const parsed = Number.parseFloat(rawUsage.estimatedCostRub.trim().replace(',', '.'));
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      normalized.estimatedCostRub = Number(parsed.toFixed(6));
+    }
+  }
+
+  return Object.keys(normalized).length > 0 ? normalized : null;
 }
 
 function resolveAnalyzeUrl(baseUrl) {
@@ -143,7 +241,8 @@ function buildGatewayErrorFromHttpStatus(status, payload) {
     return new GatewayAnalyzeError(
       `AI gateway rejected request: ${gatewayMessage}`,
       400,
-      'AI_GATEWAY_BAD_REQUEST'
+      'AI_GATEWAY_BAD_REQUEST',
+      normalizeAiUsage(payload?.aiUsage)
     );
   }
 
@@ -151,7 +250,8 @@ function buildGatewayErrorFromHttpStatus(status, payload) {
     return new GatewayAnalyzeError(
       'AI gateway unauthorized: shared secret mismatch',
       401,
-      'AI_GATEWAY_UNAUTHORIZED'
+      'AI_GATEWAY_UNAUTHORIZED',
+      normalizeAiUsage(payload?.aiUsage)
     );
   }
 
@@ -159,14 +259,16 @@ function buildGatewayErrorFromHttpStatus(status, payload) {
     return new GatewayAnalyzeError(
       `AI gateway upstream error (${status})`,
       502,
-      'AI_GATEWAY_UPSTREAM_ERROR'
+      'AI_GATEWAY_UPSTREAM_ERROR',
+      normalizeAiUsage(payload?.aiUsage)
     );
   }
 
   return new GatewayAnalyzeError(
     `AI gateway request failed with status ${status}: ${gatewayMessage}`,
     502,
-    'AI_GATEWAY_REQUEST_FAILED'
+    'AI_GATEWAY_REQUEST_FAILED',
+    normalizeAiUsage(payload?.aiUsage)
   );
 }
 
@@ -211,6 +313,8 @@ function createGatewayAnalyzeCall(config) {
 
     const requestPayload = {
       requestId: normalizeOptionalString(payload?.requestId),
+      callEventId: Number.isSafeInteger(payload?.callEventId) ? payload.callEventId : null,
+      callId: normalizeOptionalString(payload?.callId),
       phone: normalizeOptionalString(payload?.phone),
       callDateTime: normalizeOptionalString(payload?.callDateTime),
       transcript,
@@ -237,7 +341,8 @@ function createGatewayAnalyzeCall(config) {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-gateway-secret': sharedSecret
+          'x-gateway-secret': sharedSecret,
+          ...(requestPayload.requestId ? { 'x-request-id': requestPayload.requestId } : {})
         },
         signal: abortController.signal,
         body: JSON.stringify(requestPayload)
@@ -267,9 +372,15 @@ function createGatewayAnalyzeCall(config) {
     }
 
     const normalizedGatewayPayload = normalizeGatewayAnalysisPayload(responsePayload);
+    const aiUsage = normalizeAiUsage(responsePayload?.aiUsage);
 
     try {
-      return normalizeAndValidateAnalysis(normalizedGatewayPayload, { transcript });
+      const normalized = normalizeAndValidateAnalysis(normalizedGatewayPayload, { transcript });
+      if (aiUsage) {
+        normalized.aiUsage = aiUsage;
+      }
+
+      return normalized;
     } catch (error) {
       if (error instanceof AnalysisNormalizationError) {
         const normalizedCode = isNonEmptyString(error.code)

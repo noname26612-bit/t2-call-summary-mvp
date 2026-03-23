@@ -80,10 +80,15 @@ function sendKnownError(res, error, logger, requestId) {
       error: serializeError(error)
     });
 
-    return res.status(error.statusCode).json({
+    const errorPayload = {
       error: error.message,
       code: error.code
-    });
+    };
+    if (error.aiUsage && typeof error.aiUsage === 'object') {
+      errorPayload.aiUsage = error.aiUsage;
+    }
+
+    return res.status(error.statusCode).json(errorPayload);
   }
 
   logger.error('analyze_failed_unhandled_error', {
@@ -142,6 +147,8 @@ function createApp({ config, logger, analyzeCall, transcribeAudio }) {
     try {
       const analysis = await analyzeCall({
         requestId: normalizeOptionalString(payload.requestId) || req.requestId,
+        callEventId: payload.callEventId,
+        callId: normalizeOptionalString(payload.callId),
         phone: normalizeOptionalString(payload.phone),
         callDateTime: normalizeOptionalString(payload.callDateTime),
         transcript: payload.transcript.trim()
@@ -176,6 +183,7 @@ function createApp({ config, logger, analyzeCall, transcribeAudio }) {
     try {
       const response = await transcribeAudio({
         requestId: normalizeOptionalString(payload.requestId) || req.requestId,
+        callId: normalizeOptionalString(payload.callId),
         audioBuffer: hasAudioFile ? req.file.buffer : undefined,
         audioBase64: !hasAudioFile ? normalizeOptionalString(payload.audioBase64) : '',
         fileName: normalizeOptionalString(payload.fileName) || normalizeOptionalString(req?.file?.originalname),
@@ -325,7 +333,13 @@ function bootstrap() {
         ? config.openai.transcribeCandidateModel
         : '',
       polzaTimeoutMs: config.openai.timeoutMs,
-      polzaMaxRetries: config.openai.maxRetries
+      polzaMaxRetries: config.openai.maxRetries,
+      analyzeInputRubPer1kTokens: Number.isFinite(config.openai?.pricing?.analyzeInputRubPer1kTokens)
+        ? Number(config.openai.pricing.analyzeInputRubPer1kTokens)
+        : null,
+      analyzeOutputRubPer1kTokens: Number.isFinite(config.openai?.pricing?.analyzeOutputRubPer1kTokens)
+        ? Number(config.openai.pricing.analyzeOutputRubPer1kTokens)
+        : null
     });
   });
 

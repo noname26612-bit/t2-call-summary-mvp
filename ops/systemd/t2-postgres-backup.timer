@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily self-hosted PostgreSQL backup (t2-call-summary)
+
+[Timer]
+OnCalendar=*-*-* 02:15:00 UTC
+Persistent=true
+Unit=t2-postgres-backup.service
+AccuracySec=1m
+RandomizedDelaySec=2m
+
+[Install]
+WantedBy=timers.target
