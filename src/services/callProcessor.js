@@ -772,6 +772,7 @@ function createCallProcessor({
         callDateTime,
         analysis,
         employee,
+        employeePhone,
         ...callMeta
       });
 
@@ -790,7 +791,10 @@ function createCallProcessor({
         payload: {
           status: telegramResult.status,
           errorCode: telegramResult.errorCode || null,
-          httpStatus: telegramResult.httpStatus || null
+          httpStatus: telegramResult.httpStatus || null,
+          recipients: Array.isArray(telegramResult.recipientResults)
+            ? telegramResult.recipientResults
+            : []
         }
       });
 

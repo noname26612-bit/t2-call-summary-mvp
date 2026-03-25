@@ -9,6 +9,7 @@
     "migrate": "node src/scripts/migrate.js",
     "import:json": "node src/scripts/importJsonBootstrap.js",
     "smoke:telegram-v2": "node src/scripts/smokeTelegramFormatV2.js",
+    "smoke:telegram-routing": "node src/scripts/smokeTelegramMultiRecipientRouting.js",
     "smoke:transcript-button": "node src/scripts/smokeTranscriptButtonFlow.js",
     "smoke:tele2-poll-runtime-path": "node src/scripts/smokeTele2PollRuntimePath.js",
     "smoke:telegram-callback-polling": "node src/scripts/smokeTelegramCallbackPolling.js",

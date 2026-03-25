@@ -1,4 +1,6 @@
 const { formatTelegramCallSummary } = require('./telegramMessageFormatter');
+const { normalizePhone } = require('../utils/ignoredPhones');
+const { resolveEmployeePhoneFromCallMeta } = require('../utils/callParticipants');
 
 const TRANSCRIPT_CALLBACK_PREFIX = 'transcript:';
 const TRANSCRIPT_BUTTON_LABEL = 'Транскрипт (.txt)';
@@ -18,7 +20,7 @@ function isNonEmptyString(value) {
 }
 
 function normalizeChatId(value) {
-  if (typeof value === 'number' && Number.isFinite(value)) {
+  if (typeof value === 'number' && Number.isSafeInteger(value)) {
     return String(value);
   }
 
@@ -26,7 +28,12 @@ function normalizeChatId(value) {
     return '';
   }
 
-  return value.trim();
+  const normalized = value.trim();
+  if (!/^-?[0-9]+$/.test(normalized)) {
+    return '';
+  }
+
+  return normalized;
 }
 
 function normalizeCallEventId(value) {
@@ -69,6 +76,102 @@ function normalizeCallTypeForWarning(value) {
   return value.trim().toUpperCase();
 }
 
+function normalizeChatIdList(values) {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+
+  const normalized = [];
+  const seen = new Set();
+
+  for (const value of values) {
+    const chatId = normalizeChatId(value);
+    if (!chatId || seen.has(chatId)) {
+      continue;
+    }
+
+    seen.add(chatId);
+    normalized.push(chatId);
+  }
+
+  return normalized;
+}
+
+function parseRouteRuleChatIdList(rawValue) {
+  if (Array.isArray(rawValue)) {
+    return normalizeChatIdList(rawValue);
+  }
+
+  if (typeof rawValue === 'number' || isNonEmptyString(rawValue)) {
+    const values = String(rawValue)
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+    return normalizeChatIdList(values);
+  }
+
+  return [];
+}
+
+function buildNumberRouteChatIdsMap(rawRules = []) {
+  const map = new Map();
+
+  if (!Array.isArray(rawRules)) {
+    return map;
+  }
+
+  for (const rule of rawRules) {
+    if (!rule || typeof rule !== 'object' || Array.isArray(rule)) {
+      continue;
+    }
+
+    const phoneNormalized = normalizePhone(rule.phone);
+    if (!phoneNormalized) {
+      continue;
+    }
+
+    const chatIds = parseRouteRuleChatIdList(rule.chatIds);
+    if (chatIds.length === 0) {
+      continue;
+    }
+
+    const existing = map.get(phoneNormalized) || [];
+    const merged = normalizeChatIdList([...existing, ...chatIds]);
+    if (merged.length > 0) {
+      map.set(phoneNormalized, merged);
+    }
+  }
+
+  return map;
+}
+
+function resolveEmployeePhoneForRouting({
+  employeePhone,
+  callType,
+  callerNumber,
+  calleeNumber,
+  destinationNumber
+}) {
+  const sourcePhone = isNonEmptyString(employeePhone)
+    ? employeePhone
+    : resolveEmployeePhoneFromCallMeta({
+      callType,
+      callerNumber,
+      calleeNumber,
+      destinationNumber
+    });
+
+  return normalizePhone(sourcePhone);
+}
+
+function buildRecipientChatIds({ defaultChatId, globalChatIds, conditionalChatIds }) {
+  return normalizeChatIdList([
+    defaultChatId,
+    ...(Array.isArray(globalChatIds) ? globalChatIds : []),
+    ...(Array.isArray(conditionalChatIds) ? conditionalChatIds : [])
+  ]);
+}
+
 function buildTranscriptCallbackData(callEventId) {
   const normalizedCallEventId = normalizeCallEventId(callEventId);
   if (!normalizedCallEventId) {
@@ -95,6 +198,8 @@ function createTelegramSender(config, logger) {
 
   const botToken = config.botToken.trim();
   const defaultChatId = config.chatId.trim();
+  const globalChatIds = normalizeChatIdList(config.globalChatIds);
+  const numberRouteChatIdsMap = buildNumberRouteChatIdsMap(config.numberRouteRules);
   const timeoutMs = config.apiTimeoutMs;
   const timeZone = isNonEmptyString(config.timeZone) ? config.timeZone.trim() : 'Europe/Moscow';
 
@@ -314,6 +419,7 @@ function createTelegramSender(config, logger) {
     callDateTime,
     analysis,
     employee,
+    employeePhone,
     callType,
     callerNumber,
     calleeNumber,
@@ -353,11 +459,101 @@ function createTelegramSender(config, logger) {
         }
       : null;
 
-    return sendTextMessage({
-      chatId: defaultChatId,
-      text,
-      replyMarkup
+    const routingEmployeePhone = resolveEmployeePhoneForRouting({
+      employeePhone,
+      callType,
+      callerNumber,
+      calleeNumber,
+      destinationNumber
     });
+    const conditionalChatIds = routingEmployeePhone
+      ? numberRouteChatIdsMap.get(routingEmployeePhone) || []
+      : [];
+    const targetChatIds = buildRecipientChatIds({
+      defaultChatId,
+      globalChatIds,
+      conditionalChatIds
+    });
+
+    if (targetChatIds.length === 0) {
+      return {
+        status: 'failed',
+        errorCode: 'TELEGRAM_INVALID_MESSAGE',
+        errorMessage: 'No valid Telegram chat ids configured for delivery',
+        responsePayload: {
+          routePhone: routingEmployeePhone || null,
+          recipients: [],
+          sentCount: 0,
+          failedCount: 0
+        },
+        recipientResults: []
+      };
+    }
+
+    const recipientResults = [];
+
+    for (const chatId of targetChatIds) {
+      const sendResult = await sendTextMessage({
+        chatId,
+        text,
+        replyMarkup
+      });
+
+      const recipientResult = {
+        chatId,
+        status: sendResult.status,
+        httpStatus: sendResult.httpStatus || null,
+        errorCode: sendResult.errorCode || null,
+        errorMessage: sendResult.errorMessage || null
+      };
+
+      recipientResults.push(recipientResult);
+
+      if (sendResult.status === 'sent') {
+        logger.info('telegram_recipient_delivery_sent', {
+          callEventId,
+          chatId,
+          httpStatus: sendResult.httpStatus || null
+        });
+      } else {
+        logger.warn('telegram_recipient_delivery_failed', {
+          callEventId,
+          chatId,
+          errorCode: sendResult.errorCode || null,
+          httpStatus: sendResult.httpStatus || null
+        });
+      }
+    }
+
+    const sentCount = recipientResults.filter((item) => item.status === 'sent').length;
+    const failedCount = recipientResults.length - sentCount;
+    const firstFailed = recipientResults.find((item) => item.status !== 'sent') || null;
+    const status = sentCount > 0 ? 'sent' : 'failed';
+    const errorCode = failedCount === 0
+      ? null
+      : status === 'failed'
+        ? (firstFailed?.errorCode || 'TELEGRAM_SEND_FAILED')
+        : 'TELEGRAM_PARTIAL_FAILURE';
+    const errorMessage = failedCount === 0
+      ? null
+      : status === 'failed'
+        ? (firstFailed?.errorMessage || 'Telegram delivery failed for all recipients')
+        : `Telegram delivery failed for ${failedCount} of ${recipientResults.length} recipients`;
+    const httpStatus = status === 'failed' ? (firstFailed?.httpStatus || null) : null;
+
+    return {
+      status,
+      httpStatus,
+      errorCode,
+      errorMessage,
+      responsePayload: {
+        routePhone: routingEmployeePhone || null,
+        recipients: recipientResults,
+        sentCount,
+        failedCount
+      },
+      recipientResults
+    };
   }
 
   sendTelegramMessage.sendTextMessage = sendTextMessage;

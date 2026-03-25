@@ -1,4 +1,4 @@
-const { parseIgnoredPhones } = require('../utils/ignoredPhones');
+const { parseIgnoredPhones, normalizePhone } = require('../utils/ignoredPhones');
 
 const DEFAULT_PORT = 3000;
 const DEFAULT_LOG_LEVEL = 'info';
@@ -71,6 +71,117 @@ function parseBoolean(name, defaultValue) {
   }
 
   throw new Error(`${name} must be a boolean (true/false)`);
+}
+
+function normalizeTelegramChatId(value) {
+  if (typeof value === 'number' && Number.isSafeInteger(value)) {
+    return String(value);
+  }
+
+  if (!isNonEmptyString(value)) {
+    return '';
+  }
+
+  const normalized = value.trim();
+  if (!/^-?[0-9]+$/.test(normalized)) {
+    return '';
+  }
+
+  return normalized;
+}
+
+function parseCommaSeparatedValues(rawValue) {
+  if (!isNonEmptyString(rawValue)) {
+    return [];
+  }
+
+  return rawValue
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function parseTelegramChatIdList(rawValue) {
+  const values = [];
+  const seen = new Set();
+
+  for (const rawItem of parseCommaSeparatedValues(rawValue)) {
+    const chatId = normalizeTelegramChatId(rawItem);
+    if (!chatId || seen.has(chatId)) {
+      continue;
+    }
+
+    seen.add(chatId);
+    values.push(chatId);
+  }
+
+  return values;
+}
+
+function parseTelegramRouteChatIds(rawValue) {
+  if (Array.isArray(rawValue)) {
+    const values = [];
+    const seen = new Set();
+
+    for (const item of rawValue) {
+      const chatId = normalizeTelegramChatId(item);
+      if (!chatId || seen.has(chatId)) {
+        continue;
+      }
+
+      seen.add(chatId);
+      values.push(chatId);
+    }
+
+    return values;
+  }
+
+  if (typeof rawValue === 'number' || isNonEmptyString(rawValue)) {
+    return parseTelegramChatIdList(String(rawValue));
+  }
+
+  return [];
+}
+
+function parseTelegramNumberRouteRules(name) {
+  const rawValue = getOptionalString(name, '');
+  if (!isNonEmptyString(rawValue)) {
+    return [];
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(rawValue);
+  } catch (error) {
+    throw new Error(`${name} must be a valid JSON object`);
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`${name} must be a valid JSON object`);
+  }
+
+  const merged = new Map();
+
+  for (const [rawPhone, rawChatIds] of Object.entries(parsed)) {
+    const phone = normalizePhone(rawPhone);
+    if (!phone) {
+      continue;
+    }
+
+    const chatIds = parseTelegramRouteChatIds(rawChatIds);
+    if (chatIds.length === 0) {
+      continue;
+    }
+
+    const existing = merged.get(phone) || [];
+    const deduped = Array.from(new Set([...existing, ...chatIds]));
+    merged.set(phone, deduped);
+  }
+
+  return Array.from(merged.entries()).map(([phone, chatIds]) => ({
+    phone,
+    chatIds
+  }));
 }
 
 function validateTimeZone(timeZone) {
@@ -159,6 +270,8 @@ function loadConfig(options = {}) {
       chatId: validateRuntimeSecrets
         ? getRequiredString('TELEGRAM_CHAT_ID')
         : getOptionalString('TELEGRAM_CHAT_ID', ''),
+      globalChatIds: parseTelegramChatIdList(getOptionalString('TELEGRAM_GLOBAL_CHAT_IDS', '')),
+      numberRouteRules: parseTelegramNumberRouteRules('TELEGRAM_NUMBER_ROUTE_RULES'),
       apiTimeoutMs: parsePositiveInt('TELEGRAM_API_TIMEOUT_MS', DEFAULT_TELEGRAM_TIMEOUT_MS),
       webhookSecret: getOptionalString('TELEGRAM_WEBHOOK_SECRET', ''),
       polling: {

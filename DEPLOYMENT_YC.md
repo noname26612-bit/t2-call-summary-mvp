@@ -198,6 +198,10 @@ AI_ANALYZE_MIN_TRANSCRIPT_CHARS=16
 
 TELEGRAM_BOT_TOKEN=<telegram-bot-token>
 TELEGRAM_CHAT_ID=<telegram-chat-id>
+# Optional additional recipients (numeric chat_id only)
+TELEGRAM_GLOBAL_CHAT_IDS=
+# Optional number-based routing (JSON)
+TELEGRAM_NUMBER_ROUTE_RULES=
 EOF_MAIN
 
 # ai-gateway env
@@ -233,6 +237,11 @@ If `main.env` and `gateway.env` already exist and you only need to update cost-g
 # main app: low-signal threshold
 sudo sed -i '/^AI_ANALYZE_MIN_TRANSCRIPT_CHARS=/d' /opt/t2-call-summary/main.env
 sudo sh -c "printf '%s\n' 'AI_ANALYZE_MIN_TRANSCRIPT_CHARS=16' >> /opt/t2-call-summary/main.env"
+
+# main app: optional Telegram multi-recipient routing
+sudo sed -i '/^TELEGRAM_GLOBAL_CHAT_IDS=/d;/^TELEGRAM_NUMBER_ROUTE_RULES=/d' /opt/t2-call-summary/main.env
+sudo sh -c "printf '%s\n' 'TELEGRAM_GLOBAL_CHAT_IDS=' >> /opt/t2-call-summary/main.env"
+sudo sh -c "printf '%s\n' 'TELEGRAM_NUMBER_ROUTE_RULES=' >> /opt/t2-call-summary/main.env"
 
 # ai-gateway: request-level override guard
 sudo sed -i '/^ALLOW_REQUEST_MODEL_OVERRIDES=/d' /opt/t2-call-summary/gateway.env
