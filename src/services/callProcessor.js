@@ -2,7 +2,8 @@ const { normalizePhone } = require('../utils/ignoredPhones');
 const { buildTranscriptHash, buildDedupKey, buildCallIdDedupKey } = require('../utils/dedup');
 const {
   normalizeCallType,
-  resolveEmployeePhoneFromCallMeta
+  resolveEmployeePhoneFromCallMeta,
+  resolveClientPhoneFromCallMeta
 } = require('../utils/callParticipants');
 
 const DEFAULT_ANALYZE_MIN_TRANSCRIPT_CHARS = 16;
@@ -58,13 +59,97 @@ function normalizeOptionalPhone(value) {
   return normalizePhone(value.trim());
 }
 
+function normalizeOptionalBoolean(value) {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  if (typeof value === 'number') {
+    if (value === 1) {
+      return true;
+    }
+
+    if (value === 0) {
+      return false;
+    }
+  }
+
+  if (isNonEmptyString(value)) {
+    const normalized = value.trim().toLowerCase();
+    if (['1', 'true', 'yes', 'y', 'да'].includes(normalized)) {
+      return true;
+    }
+
+    if (['0', 'false', 'no', 'n', 'нет'].includes(normalized)) {
+      return false;
+    }
+  }
+
+  return null;
+}
+
+function normalizeOptionalDurationSec(value) {
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+    return Math.round(value);
+  }
+
+  if (isNonEmptyString(value)) {
+    const normalized = value.trim().replace(',', '.');
+    if (/^[0-9]+(?:\.[0-9]+)?$/.test(normalized)) {
+      const parsed = Number.parseFloat(normalized);
+      if (Number.isFinite(parsed) && parsed >= 0) {
+        return Math.round(parsed);
+      }
+    }
+  }
+
+  return null;
+}
+
 function resolveOptionalCallMeta(payload = {}) {
+  const answered = normalizeOptionalBoolean(payload.answered);
+  const noAnswer = normalizeOptionalBoolean(payload.noAnswer);
+  const inferredAnswered = answered !== null
+    ? answered
+    : (noAnswer !== null ? !noAnswer : null);
+
   return {
     callType: normalizeCallType(payload.callType),
     callerNumber: normalizeOptionalPhone(payload.callerNumber),
     calleeNumber: normalizeOptionalPhone(payload.calleeNumber),
-    destinationNumber: normalizeOptionalPhone(payload.destinationNumber)
+    destinationNumber: normalizeOptionalPhone(payload.destinationNumber),
+    durationSec: normalizeOptionalDurationSec(payload.durationSec),
+    answered: inferredAnswered,
+    noAnswer: inferredAnswered === null ? null : !inferredAnswered
   };
+}
+
+function resolveCallDirectionContext(callType) {
+  if (callType === 'OUTGOING') {
+    return 'outgoing_employee_to_client';
+  }
+
+  if (callType === 'INCOMING') {
+    return 'incoming_client_to_employee';
+  }
+
+  return 'unknown_direction';
+}
+
+function resolveWhoCalledWhom({ callType, employeePhone, clientPhone }) {
+  if (!employeePhone || !clientPhone) {
+    return '';
+  }
+
+  if (callType === 'OUTGOING') {
+    return `${employeePhone} -> ${clientPhone}`;
+  }
+
+  if (callType === 'INCOMING') {
+    return `${clientPhone} -> ${employeePhone}`;
+  }
+
+  return '';
 }
 
 function normalizeEmployeeRecord(rawEmployee) {
@@ -258,7 +343,14 @@ function evaluateAnalyzeSkipGate(transcript, options = {}) {
     };
   }
 
-  if (SERVICE_PHRASE_PATTERNS.some((pattern) => pattern.test(normalized))) {
+  const words = tokenizeTranscriptWords(normalized);
+  const meaningfulWords = words.filter((word) => word.length > 1 && !LOW_SIGNAL_WORDS.has(word));
+  const singleCharWordCount = words.filter((word) => word.length <= 1).length;
+  const singleCharWordRatio = words.length > 0 ? singleCharWordCount / words.length : 0;
+  const businessSignalDetected = hasBusinessSignal(words);
+  const servicePhraseDetected = SERVICE_PHRASE_PATTERNS.some((pattern) => pattern.test(normalized));
+
+  if (servicePhraseDetected && !businessSignalDetected && normalized.length <= 180 && meaningfulWords.length <= 8) {
     return {
       shouldSkip: true,
       reason: ANALYZE_SKIP_REASONS.LOW_SIGNAL_TRANSCRIPT_SKIP,
@@ -266,16 +358,13 @@ function evaluateAnalyzeSkipGate(transcript, options = {}) {
         signalType: 'service_phrase_only',
         normalizedTranscript: normalized,
         transcriptLength: normalized.length,
+        wordsCount: words.length,
+        meaningfulWordsCount: meaningfulWords.length,
+        businessSignalDetected,
         minTranscriptChars
       }
     };
   }
-
-  const words = tokenizeTranscriptWords(normalized);
-  const meaningfulWords = words.filter((word) => word.length > 1 && !LOW_SIGNAL_WORDS.has(word));
-  const singleCharWordCount = words.filter((word) => word.length <= 1).length;
-  const singleCharWordRatio = words.length > 0 ? singleCharWordCount / words.length : 0;
-  const businessSignalDetected = hasBusinessSignal(words);
 
   if (!businessSignalDetected && meaningfulWords.length <= 2 && normalized.length <= 80) {
     return {
@@ -477,6 +566,21 @@ function createCallProcessor({
     const employeePhone = callMeta.callType
       ? normalizeOptionalPhone(resolveEmployeePhoneFromCallMeta(callMeta))
       : '';
+    const clientPhone = callMeta.callType
+      ? normalizeOptionalPhone(resolveClientPhoneFromCallMeta({
+        ...callMeta,
+        phone
+      }))
+      : normalizeOptionalPhone(phone);
+    const transcriptLength = transcript.length;
+    const shortCall = (Number.isInteger(callMeta.durationSec) && callMeta.durationSec <= 30)
+      || transcriptLength <= 80;
+    const callDirectionContext = resolveCallDirectionContext(callMeta.callType);
+    const whoCalledWhom = resolveWhoCalledWhom({
+      callType: callMeta.callType,
+      employeePhone,
+      clientPhone
+    });
     const requestId = isNonEmptyString(options.requestId) ? options.requestId.trim() : '';
     const source = getHistorySource(options.source);
     const transcriptHash = buildTranscriptHash(transcript);
@@ -530,7 +634,13 @@ function createCallProcessor({
         contentBasedDedupKey,
         externalCallId,
         callType: callMeta.callType,
+        durationSec: callMeta.durationSec,
+        answered: callMeta.answered,
         employeePhone,
+        clientPhone,
+        shortCall,
+        callDirectionContext,
+        whoCalledWhom,
         employeeId: employee?.id || null
       }
     });
@@ -642,15 +752,15 @@ function createCallProcessor({
     const analyzeSkipGate = evaluateAnalyzeSkipGate(transcript, {
       minTranscriptChars: analyzeMinTranscriptChars
     });
-    if (analyzeSkipGate.shouldSkip) {
-      const response = {
-        status: 'ignored',
+    const analyzeBypassHint = analyzeSkipGate.shouldSkip
+      ? {
         reason: analyzeSkipGate.reason,
-        phone,
-        callDateTime
-      };
+        ...analyzeSkipGate.details
+      }
+      : null;
 
-      logger.info('cost_guard_analyze_skip', {
+    if (analyzeBypassHint) {
+      logger.info('cost_guard_analyze_bypass', {
         requestId,
         callEventId,
         callId,
@@ -660,46 +770,11 @@ function createCallProcessor({
         minTranscriptCharsConfigured: analyzeMinTranscriptChars
       });
 
-      await storage.completeDedupKey({
-        dedupKey,
-        status: 'processed',
-        callEventId
-      });
-
-      await storage.updateCallEventStatus({
-        callEventId,
-        status: 'ignored',
-        reason: analyzeSkipGate.reason
-      });
-
       await appendAuditSafely({
         callEventId,
-        eventType: 'call_skipped_before_analyze',
-        payload: {
-          reason: analyzeSkipGate.reason,
-          ...analyzeSkipGate.details
-        }
+        eventType: 'call_bypass_before_analyze',
+        payload: analyzeBypassHint
       });
-
-      await appendAiUsageAuditSafely({
-        xRequestId: requestId,
-        callEventId,
-        callId,
-        operation: 'analyze',
-        model: '',
-        provider: 'polza',
-        promptTokens: null,
-        completionTokens: null,
-        totalTokens: null,
-        transcriptCharsRaw: transcript.length,
-        transcriptCharsSent: 0,
-        durationMs: 0,
-        responseStatus: 'skipped',
-        skipReason: analyzeSkipGate.reason,
-        estimatedCostRub: null
-      });
-
-      return response;
     }
 
     try {
@@ -718,6 +793,16 @@ function createCallProcessor({
           callerNumber: callMeta.callerNumber,
           calleeNumber: callMeta.calleeNumber,
           destinationNumber: callMeta.destinationNumber,
+          durationSec: callMeta.durationSec,
+          answered: callMeta.answered,
+          noAnswer: callMeta.noAnswer,
+          transcriptLength,
+          shortCall,
+          callDirectionContext,
+          employeePhone,
+          clientPhone,
+          whoCalledWhom,
+          analyzeBypassHint,
           employee
         });
       } catch (error) {
@@ -792,6 +877,13 @@ function createCallProcessor({
           status: telegramResult.status,
           errorCode: telegramResult.errorCode || null,
           httpStatus: telegramResult.httpStatus || null,
+          formattedMessageHashSha256: telegramResult?.responsePayload?.formattedMessageHashSha256 || null,
+          formattedMessageLength: Number.isInteger(telegramResult?.responsePayload?.formattedMessageLength)
+            ? telegramResult.responsePayload.formattedMessageLength
+            : null,
+          formattedMessagePreview: isNonEmptyString(telegramResult?.responsePayload?.formattedMessagePreview)
+            ? telegramResult.responsePayload.formattedMessagePreview
+            : null,
           recipients: Array.isArray(telegramResult.recipientResults)
             ? telegramResult.recipientResults
             : []

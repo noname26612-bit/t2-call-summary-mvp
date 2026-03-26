@@ -306,6 +306,13 @@ function loadConfig(options = {}) {
         phoneFieldPath: getOptionalString('TELE2_PHONE_FIELD_PATH', ''),
         callDateTimeFieldPath: getOptionalString('TELE2_CALL_DATETIME_FIELD_PATH', ''),
         transcriptFieldPath: getOptionalString('TELE2_TRANSCRIPT_FIELD_PATH', ''),
+        callTypeFieldPath: getOptionalString('TELE2_CALL_TYPE_FIELD_PATH', ''),
+        callerNumberFieldPath: getOptionalString('TELE2_CALLER_NUMBER_FIELD_PATH', ''),
+        calleeNumberFieldPath: getOptionalString('TELE2_CALLEE_NUMBER_FIELD_PATH', ''),
+        destinationNumberFieldPath: getOptionalString('TELE2_DESTINATION_NUMBER_FIELD_PATH', ''),
+        durationSecFieldPath: getOptionalString('TELE2_DURATION_SEC_FIELD_PATH', ''),
+        answeredFieldPath: getOptionalString('TELE2_ANSWERED_FIELD_PATH', ''),
+        noAnswerFieldPath: getOptionalString('TELE2_NO_ANSWER_FIELD_PATH', ''),
         callIdFieldPath: getOptionalString('TELE2_CALL_ID_FIELD_PATH', '')
       }
     },

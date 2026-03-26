@@ -17,6 +17,12 @@ const PRIMARY_SCENARIO_ALIASES = Object.freeze({
   ремонт: 'Ремонт',
   сервис: 'Ремонт',
   service: 'Ремонт',
+  заказ: 'Заказ / производство',
+  производство: 'Заказ / производство',
+  партия: 'Заказ / производство',
+  запуск: 'Заказ / производство',
+  заказ_производство: 'Заказ / производство',
+  order_production: 'Заказ / производство',
   доставка: 'Доставка',
   логистика: 'Доставка',
   delivery: 'Доставка',
@@ -28,7 +34,7 @@ const PRIMARY_SCENARIO_BY_CATEGORY = Object.freeze({
   запчасти: 'Запчасти',
   аренда: 'Аренда',
   сервис: 'Ремонт',
-  продажа: 'Другое',
+  продажа: 'Заказ / производство',
   спам: 'Другое',
   прочее: 'Другое'
 });
@@ -60,6 +66,37 @@ const REPAIR_SIGNAL_TOKENS = Object.freeze([
   'мастер',
   'сервисный выезд',
   'выездной ремонт'
+]);
+
+const PRICE_SIGNAL_TOKENS = Object.freeze([
+  'цена',
+  'стоим',
+  'руб',
+  'тыс',
+  'тысяч'
+]);
+
+const TERM_SIGNAL_TOKENS = Object.freeze([
+  'срок',
+  'день',
+  'дня',
+  'дней',
+  'недел',
+  'отгруз',
+  'выезд',
+  'достав',
+  'запуск'
+]);
+
+const ORDER_PRODUCTION_SIGNAL_TOKENS = Object.freeze([
+  'заказ',
+  'парт',
+  'производств',
+  'запуск',
+  'комплектност',
+  'изготов',
+  'тираж',
+  'количеств'
 ]);
 
 const EMPTY_OPTIONAL_TEXT_TOKENS = new Set([
@@ -160,7 +197,7 @@ function resolveSubscriberPhone({ callType, callerNumber, calleeNumber, destinat
 }
 
 function normalizeScenarioToken(value) {
-  return normalizeSingleLine(value).toLowerCase().replace(/[\s-]+/g, '_');
+  return normalizeSingleLine(value).toLowerCase().replace(/[\s\/-]+/g, '_');
 }
 
 function normalizeForContains(value) {
@@ -196,7 +233,10 @@ function formatCallDateTime(callDateTime, timeZone) {
 function resolvePrimaryScenario(analysis) {
   const normalizedToken = normalizeScenarioToken(analysis?.primaryScenario);
   if (normalizedToken && PRIMARY_SCENARIO_ALIASES[normalizedToken]) {
-    return PRIMARY_SCENARIO_ALIASES[normalizedToken];
+    const directScenario = PRIMARY_SCENARIO_ALIASES[normalizedToken];
+    if (directScenario !== 'Другое') {
+      return directScenario;
+    }
   }
 
   const contextText = [
@@ -207,18 +247,31 @@ function resolvePrimaryScenario(analysis) {
     .join(' ')
     .toLowerCase();
 
-  if (contextText.includes('запчаст')) {
-    return 'Запчасти';
-  }
-
   if (contextText.includes('аренд')) {
     return 'Аренда';
   }
 
   const hasDeliverySignal = DELIVERY_SIGNAL_TOKENS.some((token) => contextText.includes(token));
   const hasRepairSignal = REPAIR_SIGNAL_TOKENS.some((token) => contextText.includes(token));
+  const hasPriceSignal = PRICE_SIGNAL_TOKENS.some((token) => contextText.includes(token));
+  const hasTermSignal = TERM_SIGNAL_TOKENS.some((token) => contextText.includes(token));
+  const hasOrderProductionSignal = ORDER_PRODUCTION_SIGNAL_TOKENS.some((token) => contextText.includes(token));
+  const hasStrongOrderSignal = contextText.includes('парт') || contextText.includes('производств') || contextText.includes('запуск');
+  const hasPartsSignal = contextText.includes('запчаст') || contextText.includes('подшип') || contextText.includes('ролик');
 
   const categoryToken = normalizeScenarioToken(analysis?.category);
+  if (hasStrongOrderSignal || (hasOrderProductionSignal && hasPriceSignal && hasTermSignal)) {
+    return 'Заказ / производство';
+  }
+
+  if (hasPartsSignal && !hasStrongOrderSignal) {
+    return 'Запчасти';
+  }
+
+  if (hasOrderProductionSignal || (hasPriceSignal && hasTermSignal)) {
+    return 'Заказ / производство';
+  }
+
   if (categoryToken === 'сервис' || categoryToken === 'service') {
     if (hasDeliverySignal && !hasRepairSignal) {
       return 'Доставка';
@@ -603,6 +656,55 @@ function resolveSubscriberDisplay({
   }));
 }
 
+function resolveReportField(analysis, fieldNames, fallback = '') {
+  for (const fieldName of fieldNames) {
+    const value = normalizeOptionalText(analysis?.[fieldName]);
+    if (value) {
+      return value;
+    }
+  }
+
+  return fallback;
+}
+
+function shouldIncludeImportantNote(value) {
+  const normalized = normalizeOptionalText(value).toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+
+  return [
+    'неразбор',
+    'неуверен',
+    'шум',
+    'плохо слыш',
+    'коротк',
+    'мало контекст',
+    'не удалось',
+    'сомнительн',
+    'термин',
+    'название',
+    'низкая уверенность'
+  ].some((token) => normalized.includes(token));
+}
+
+function resolveImportantNote(analysis) {
+  const direct = resolveReportField(analysis, ['importantNote'], '');
+  if (shouldIncludeImportantNote(direct)) {
+    return direct;
+  }
+
+  if (Array.isArray(analysis?.analysisWarnings)) {
+    for (const warning of analysis.analysisWarnings) {
+      if (shouldIncludeImportantNote(warning)) {
+        return normalizeOptionalText(warning);
+      }
+    }
+  }
+
+  return '';
+}
+
 function formatTelegramCallSummary({
   phone,
   callDateTime,
@@ -615,48 +717,51 @@ function formatTelegramCallSummary({
   destinationNumber
 } = {}) {
   const normalizedAnalysis = isPlainObject(analysis) ? analysis : {};
-  const primaryScenario = resolvePrimaryScenario(normalizedAnalysis);
+  const primaryScenario = resolvePrimaryScenario({
+    ...normalizedAnalysis,
+    primaryScenario: normalizedAnalysis?.scenario || normalizedAnalysis?.primaryScenario
+  });
   const callTypeText = resolveCallTypeLabel(callType);
   const phoneText = normalizePhoneText(phone) || EMPTY_VALUE;
   const dateTimeText = formatCallDateTime(callDateTime, timeZone);
-  const companyName = normalizeOptionalText(normalizedAnalysis.companyName);
-  const orderNumber = normalizeOptionalText(normalizedAnalysis.orderNumber);
-  const wantedText = normalizeWantedSummaryForMessage(
-    buildWantedText(normalizedAnalysis, { companyName, orderNumber })
-  ) || 'Запрос клиента зафиксирован.';
+  const callEssence = resolveReportField(
+    normalizedAnalysis,
+    ['callEssence', 'shortSummary', 'summary', 'clientGoal'],
+    'Короткий контакт по рабочему вопросу.'
+  );
+  const whatDiscussed = resolveReportField(
+    normalizedAnalysis,
+    ['whatDiscussed', 'result', 'issueReason', 'summary'],
+    'Предметные детали в разговоре не зафиксированы.'
+  );
+  const outcome = resolveReportField(
+    normalizedAnalysis,
+    ['outcome'],
+    'Итоговые договоренности в разговоре не зафиксированы.'
+  );
+  const importantNote = resolveImportantNote(normalizedAnalysis);
   const employeeSummaryLine = formatEmployeeSummaryLine(employee);
-  const hasAdditionalDetails = Boolean(companyName || orderNumber);
-  const hasBottomBlock = Boolean(employeeSummaryLine || callTypeText);
 
   const lines = [
     `Кто звонил: ${phoneText}`,
     `Когда звонил: ${dateTimeText}`,
     '',
-    `Итог по фактам: ${wantedText}`,
-    '',
-    `Категория: ${primaryScenario}`
+    `Суть звонка: ${callEssence}`,
+    `Что обсуждали: ${whatDiscussed}`,
+    `Чем закончилось: ${outcome}`
   ];
 
-  if (hasAdditionalDetails || hasBottomBlock) {
-    lines.push('');
+  if (importantNote) {
+    lines.push(`Важно: ${importantNote}`);
   }
 
-  if (hasAdditionalDetails) {
-    if (companyName) {
-      lines.push(`Компания: ${companyName}`);
-    }
-
-    if (orderNumber) {
-      lines.push(`Номер заказа: ${orderNumber}`);
-    }
-  }
-
-  if (hasAdditionalDetails && hasBottomBlock) {
-    lines.push('');
-  }
+  lines.push(`Сценарий: ${primaryScenario}`);
+  lines.push('');
 
   if (employeeSummaryLine) {
     lines.push(`Сотрудник: ${employeeSummaryLine}`);
+  } else {
+    lines.push('Сотрудник: —');
   }
 
   lines.push(`Тип звонка: ${callTypeText}`);

@@ -22,6 +22,11 @@ const DEFAULT_FETCH_LIMIT = 30;
 const DEFAULT_MAX_CANDIDATES = 5;
 const DEFAULT_MIN_AUDIO_BYTES = 4096;
 const DEFAULT_TIMEZONE_OFFSET = '+03:00';
+const DEFAULT_DOWNLOAD_RETRY_ATTEMPTS = 3;
+const DEFAULT_DOWNLOAD_RETRY_BACKOFF_MS = 1500;
+const DEFAULT_TRANSCRIBE_RETRY_ATTEMPTS = 2;
+const DEFAULT_TRANSCRIBE_RETRY_BACKOFF_MS = 1500;
+const DEFAULT_REPLAY_FETCH_LIMIT = 500;
 const MIN_CONVERSATION_DURATION_SECONDS = 10;
 const PRE_TRANSCRIBE_SKIP_REASONS = Object.freeze({
   DUPLICATE_EVENT: 'skipped_before_transcribe:duplicate_call_skip',
@@ -118,8 +123,55 @@ function parseBoolean(rawValue, fallbackValue) {
   throw new Error(`Invalid boolean value: ${rawValue}`);
 }
 
+function normalizeErrorCodeToken(rawValue) {
+  if (!isNonEmptyString(rawValue)) {
+    return '';
+  }
+
+  return rawValue.trim().toUpperCase();
+}
+
+function parseErrorCodeList(rawValue) {
+  if (!isNonEmptyString(rawValue)) {
+    return [];
+  }
+
+  const unique = [];
+  const seen = new Set();
+
+  for (const chunk of rawValue.split(',')) {
+    const token = normalizeErrorCodeToken(chunk);
+    if (!token || seen.has(token)) {
+      continue;
+    }
+
+    seen.add(token);
+    unique.push(token);
+  }
+
+  return unique;
+}
+
+function appendReplayRecordFileNames(target, rawValue) {
+  if (!isNonEmptyString(rawValue)) {
+    return;
+  }
+
+  const chunks = rawValue
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  for (const chunk of chunks) {
+    target.push(chunk);
+  }
+}
+
 function parseArgs(argv, defaults) {
   const parsed = { ...defaults };
+  parsed.recordFileNames = Array.isArray(defaults.recordFileNames)
+    ? [...defaults.recordFileNames]
+    : [];
   const args = [...argv];
 
   while (args.length > 0) {
@@ -147,6 +199,28 @@ function parseArgs(argv, defaults) {
 
     if (arg === '--retry-failed') {
       parsed.retryFailed = true;
+      continue;
+    }
+
+    if (arg.startsWith('--retry-skipped-error-codes=')) {
+      parsed.retrySkippedErrorCodes = parseErrorCodeList(
+        arg.split('=').slice(1).join('=')
+      );
+      continue;
+    }
+
+    if (arg === '--retry-skipped-error-codes') {
+      parsed.retrySkippedErrorCodes = parseErrorCodeList(args.shift());
+      continue;
+    }
+
+    if (arg.startsWith('--record-file-name=')) {
+      appendReplayRecordFileNames(parsed.recordFileNames, arg.split('=').slice(1).join('='));
+      continue;
+    }
+
+    if (arg === '--record-file-name') {
+      appendReplayRecordFileNames(parsed.recordFileNames, args.shift());
       continue;
     }
 
@@ -217,6 +291,96 @@ function parseArgs(argv, defaults) {
 
     if (arg === '--timeout-ms') {
       parsed.timeoutMs = parsePositiveInt(args.shift(), 'timeout-ms', parsed.timeoutMs);
+      continue;
+    }
+
+    if (arg.startsWith('--download-retry-attempts=')) {
+      parsed.downloadRetryAttempts = parsePositiveInt(
+        arg.split('=').slice(1).join('='),
+        'download-retry-attempts',
+        parsed.downloadRetryAttempts
+      );
+      continue;
+    }
+
+    if (arg === '--download-retry-attempts') {
+      parsed.downloadRetryAttempts = parsePositiveInt(
+        args.shift(),
+        'download-retry-attempts',
+        parsed.downloadRetryAttempts
+      );
+      continue;
+    }
+
+    if (arg.startsWith('--download-retry-backoff-ms=')) {
+      parsed.downloadRetryBackoffMs = parsePositiveInt(
+        arg.split('=').slice(1).join('='),
+        'download-retry-backoff-ms',
+        parsed.downloadRetryBackoffMs
+      );
+      continue;
+    }
+
+    if (arg === '--download-retry-backoff-ms') {
+      parsed.downloadRetryBackoffMs = parsePositiveInt(
+        args.shift(),
+        'download-retry-backoff-ms',
+        parsed.downloadRetryBackoffMs
+      );
+      continue;
+    }
+
+    if (arg.startsWith('--transcribe-retry-attempts=')) {
+      parsed.transcribeRetryAttempts = parsePositiveInt(
+        arg.split('=').slice(1).join('='),
+        'transcribe-retry-attempts',
+        parsed.transcribeRetryAttempts
+      );
+      continue;
+    }
+
+    if (arg === '--transcribe-retry-attempts') {
+      parsed.transcribeRetryAttempts = parsePositiveInt(
+        args.shift(),
+        'transcribe-retry-attempts',
+        parsed.transcribeRetryAttempts
+      );
+      continue;
+    }
+
+    if (arg.startsWith('--transcribe-retry-backoff-ms=')) {
+      parsed.transcribeRetryBackoffMs = parsePositiveInt(
+        arg.split('=').slice(1).join('='),
+        'transcribe-retry-backoff-ms',
+        parsed.transcribeRetryBackoffMs
+      );
+      continue;
+    }
+
+    if (arg === '--transcribe-retry-backoff-ms') {
+      parsed.transcribeRetryBackoffMs = parsePositiveInt(
+        args.shift(),
+        'transcribe-retry-backoff-ms',
+        parsed.transcribeRetryBackoffMs
+      );
+      continue;
+    }
+
+    if (arg.startsWith('--replay-fetch-limit=')) {
+      parsed.replayFetchLimit = parsePositiveInt(
+        arg.split('=').slice(1).join('='),
+        'replay-fetch-limit',
+        parsed.replayFetchLimit
+      );
+      continue;
+    }
+
+    if (arg === '--replay-fetch-limit') {
+      parsed.replayFetchLimit = parsePositiveInt(
+        args.shift(),
+        'replay-fetch-limit',
+        parsed.replayFetchLimit
+      );
       continue;
     }
 
@@ -395,6 +559,54 @@ function buildLookbackWindow({ lookbackMinutes, offsetMeta }) {
   };
 }
 
+function buildDayWindowByRecordFileName(recordFileName, offsetMeta) {
+  const normalizedRecord = normalizeRecordFileName(recordFileName);
+  if (!normalizedRecord.includes('/')) {
+    return null;
+  }
+
+  const [datePart] = normalizedRecord.split('/', 1);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+    return null;
+  }
+
+  return {
+    start: `${datePart}T00:00:00${offsetMeta.value}`,
+    end: `${datePart}T23:59:59${offsetMeta.value}`
+  };
+}
+
+function delayMs(value) {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    setTimeout(resolve, value);
+  });
+}
+
+function buildBackoffMs(baseMs, attemptNumber) {
+  if (!Number.isSafeInteger(baseMs) || baseMs <= 0) {
+    return 0;
+  }
+
+  const safeAttempt = Number.isSafeInteger(attemptNumber) && attemptNumber > 0
+    ? attemptNumber
+    : 1;
+
+  return baseMs * (2 ** (safeAttempt - 1));
+}
+
+function isRetryableHttpStatus(statusCode) {
+  return Number.isInteger(statusCode) && (
+    statusCode === 408
+    || statusCode === 425
+    || statusCode === 429
+    || statusCode >= 500
+  );
+}
+
 function buildAuthorizationHeader(token, scheme) {
   if (scheme === 'bearer') {
     return `Bearer ${token}`;
@@ -450,6 +662,8 @@ function buildProcessCallPayload({
   callDateTime = '',
   transcript = ''
 } = {}) {
+  const durationMeta = extractConversationDuration(record);
+  const missedMeta = recordLooksMissed(record);
   const callId = pickFirstNonEmptyString([
     record?.callId,
     record?.externalCallId,
@@ -475,6 +689,18 @@ function buildProcessCallPayload({
     if (isNonEmptyString(value)) {
       payload[key] = value;
     }
+  }
+
+  if (typeof durationMeta.seconds === 'number' && Number.isFinite(durationMeta.seconds) && durationMeta.seconds >= 0) {
+    payload.durationSec = Math.round(durationMeta.seconds);
+  }
+
+  if (isNonEmptyString(missedMeta.sourceField)) {
+    payload.answered = !missedMeta.isMissed;
+    payload.noAnswer = missedMeta.isMissed;
+  } else if (typeof durationMeta.seconds === 'number' && Number.isFinite(durationMeta.seconds) && durationMeta.seconds > 0) {
+    payload.answered = true;
+    payload.noAnswer = false;
   }
 
   return payload;
@@ -746,6 +972,43 @@ async function fetchTele2Records({
   return parsed;
 }
 
+async function fetchTele2RecordByFileName({
+  recordFileName,
+  t2BaseUrl,
+  t2Token,
+  t2AuthScheme,
+  timeoutMs,
+  offsetMeta,
+  fetchLimit
+}) {
+  const dayWindow = buildDayWindowByRecordFileName(recordFileName, offsetMeta);
+  if (!dayWindow) {
+    return null;
+  }
+
+  const records = await fetchTele2Records({
+    t2BaseUrl,
+    t2Token,
+    t2AuthScheme,
+    timeoutMs,
+    start: dayWindow.start,
+    end: dayWindow.end,
+    fetchLimit
+  });
+
+  const normalizedTarget = normalizeRecordFileName(recordFileName);
+  for (const record of records) {
+    if (normalizeRecordFileName(record?.recordFileName) === normalizedTarget) {
+      return {
+        ...record,
+        recordFileName: normalizedTarget
+      };
+    }
+  }
+
+  return null;
+}
+
 async function downloadTele2Audio({
   recordFileName,
   t2BaseUrl,
@@ -789,6 +1052,100 @@ async function downloadTele2Audio({
     contentType,
     sizeBytes: bodyBuffer.length
   };
+}
+
+function isRetryableDownloadError(error) {
+  const errorCode = isNonEmptyString(error?.code) ? error.code.trim() : '';
+  if (errorCode === 'REQUEST_TIMEOUT') {
+    return true;
+  }
+
+  if (errorCode === 'T2_FILE_HTTP_ERROR') {
+    if (!Number.isInteger(error?.statusCode)) {
+      return true;
+    }
+
+    return isRetryableHttpStatus(error.statusCode);
+  }
+
+  return false;
+}
+
+async function downloadTele2AudioWithRetry({
+  recordFileName,
+  t2BaseUrl,
+  t2Token,
+  t2AuthScheme,
+  timeoutMs,
+  logger,
+  requestId,
+  attempts,
+  baseBackoffMs
+}) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const audio = await downloadTele2Audio({
+        recordFileName,
+        t2BaseUrl,
+        t2Token,
+        t2AuthScheme,
+        timeoutMs
+      });
+
+      if (attempt > 1) {
+        logger.info('tele2_poll_download_recovered_after_retry', {
+          recordFileName,
+          requestId,
+          attempt,
+          maxAttempts: attempts,
+          audioBytes: audio.sizeBytes
+        });
+      }
+
+      return {
+        audio,
+        attemptsUsed: attempt
+      };
+    } catch (error) {
+      lastError = error;
+      const retryable = isRetryableDownloadError(error);
+      const errorCode = isNonEmptyString(error?.code) ? error.code.trim() : 'T2_FILE_DOWNLOAD_FAILED';
+      const statusCode = Number.isInteger(error?.statusCode) ? error.statusCode : null;
+
+      logger.warn('tele2_poll_download_attempt_failed', {
+        recordFileName,
+        requestId,
+        attempt,
+        maxAttempts: attempts,
+        retryable,
+        errorCode,
+        statusCode,
+        errorMessage: truncateMessage(error?.message || 'Unknown download error', 300)
+      });
+
+      if (!retryable || attempt >= attempts) {
+        throw error;
+      }
+
+      const retryDelayMs = buildBackoffMs(baseBackoffMs, attempt);
+      logger.info('tele2_poll_download_retry_scheduled', {
+        recordFileName,
+        requestId,
+        attempt,
+        nextAttempt: attempt + 1,
+        retryDelayMs
+      });
+      await delayMs(retryDelayMs);
+    }
+  }
+
+  if (lastError) {
+    throw lastError;
+  }
+
+  throw new Error('Unexpected download retry state');
 }
 
 async function transcribeViaGateway({
@@ -844,6 +1201,9 @@ async function transcribeViaGateway({
     requestError.statusCode = response.status;
     requestError.code = payload?.code || 'AI_GATEWAY_TRANSCRIBE_HTTP_ERROR';
     requestError.responseBody = payload || raw;
+    if (payload?.details && typeof payload.details === 'object') {
+      requestError.details = payload.details;
+    }
     if (payload?.aiUsage && typeof payload.aiUsage === 'object') {
       requestError.aiUsage = payload.aiUsage;
     }
@@ -894,6 +1254,187 @@ function resolveTranscribeErrorCode(error) {
 
 function isEmptyTranscriptionCode(errorCode) {
   return errorCode === 'POLZA_EMPTY_TRANSCRIPTION' || errorCode === 'AI_GATEWAY_EMPTY_TRANSCRIPT';
+}
+
+function readAudioFingerprint(tempFilePath) {
+  if (!isNonEmptyString(tempFilePath)) {
+    return {
+      sha256: '',
+      first16Hex: ''
+    };
+  }
+
+  try {
+    const audioBuffer = fs.readFileSync(tempFilePath);
+    return {
+      sha256: crypto.createHash('sha256').update(audioBuffer).digest('hex'),
+      first16Hex: audioBuffer.subarray(0, 16).toString('hex')
+    };
+  } catch (error) {
+    return {
+      sha256: '',
+      first16Hex: ''
+    };
+  }
+}
+
+function normalizeTranscriptionOutcome(outcome, index) {
+  const normalized = outcome && typeof outcome === 'object' ? outcome : {};
+  const attempt = Number.isSafeInteger(normalized.attempt) && normalized.attempt > 0
+    ? normalized.attempt
+    : index + 1;
+  const status = isNonEmptyString(normalized.status) ? normalized.status.trim() : 'failed';
+  const errorCode = isNonEmptyString(normalized.errorCode) ? normalized.errorCode.trim() : '';
+  const model = isNonEmptyString(normalized.model) ? normalized.model.trim() : '';
+  const durationMs = Number.isSafeInteger(normalized.durationMs) && normalized.durationMs >= 0
+    ? normalized.durationMs
+    : null;
+  const statusCode = Number.isInteger(normalized.statusCode) ? normalized.statusCode : null;
+  const transcriptLength = Number.isSafeInteger(normalized.transcriptLength) && normalized.transcriptLength >= 0
+    ? normalized.transcriptLength
+    : 0;
+  const errorMessage = isNonEmptyString(normalized.errorMessage)
+    ? truncateMessage(normalized.errorMessage, 180)
+    : '';
+  const errorDetails = normalized.errorDetails && typeof normalized.errorDetails === 'object'
+    ? normalized.errorDetails
+    : null;
+
+  return {
+    attempt,
+    status,
+    errorCode,
+    model,
+    durationMs,
+    statusCode,
+    transcriptLength,
+    errorMessage,
+    errorDetails
+  };
+}
+
+function classifyEmptyTranscriptionDiagnostics({ outcomes, audioBytes, conversationDurationSeconds }) {
+  const normalizedOutcomes = Array.isArray(outcomes)
+    ? outcomes.map((outcome, index) => normalizeTranscriptionOutcome(outcome, index))
+    : [];
+  const hasOutcomes = normalizedOutcomes.length > 0;
+  const hasOnlyEmptyCodes = hasOutcomes
+    ? normalizedOutcomes.every((item) => isEmptyTranscriptionCode(item.errorCode))
+    : false;
+  const hasMixedFailures = hasOutcomes
+    ? normalizedOutcomes.some((item) => !isEmptyTranscriptionCode(item.errorCode) && item.errorCode)
+    : false;
+  const shortConversationLikely = typeof conversationDurationSeconds === 'number'
+    && Number.isFinite(conversationDurationSeconds)
+    && conversationDurationSeconds <= 15;
+  const smallAudioLikely = Number.isSafeInteger(audioBytes) && audioBytes > 0 && audioBytes < 16384;
+
+  if (hasOnlyEmptyCodes && (shortConversationLikely || smallAudioLikely)) {
+    return 'audio_short_or_low_signal_likely';
+  }
+
+  if (hasOnlyEmptyCodes) {
+    return 'upstream_empty_after_retries';
+  }
+
+  if (hasMixedFailures) {
+    return 'mixed_transient_or_upstream_failures';
+  }
+
+  return 'empty_transcription_unclassified';
+}
+
+function buildEmptyTranscriptionDiagnostics({
+  recordFileName,
+  requestId,
+  error,
+  audio,
+  conversationDurationSeconds,
+  requestedModel,
+  aiGatewayTranscribePath
+}) {
+  const normalizedError = error && typeof error === 'object' ? error : {};
+  const outcomes = Array.isArray(normalizedError.transcriptionOutcomes)
+    ? normalizedError.transcriptionOutcomes.map((item, index) => normalizeTranscriptionOutcome(item, index))
+    : [];
+  const attemptCodes = outcomes
+    .map((item) => item.errorCode || (item.status === 'success' ? 'SUCCESS' : 'UNKNOWN'))
+    .filter(Boolean);
+  const fingerprint = readAudioFingerprint(audio?.tempFilePath);
+  const audioBytes = Number.isSafeInteger(audio?.sizeBytes) ? audio.sizeBytes : null;
+  const contentType = isNonEmptyString(audio?.contentType) ? audio.contentType.trim() : '';
+  const finalErrorCode = isNonEmptyString(normalizedError.code) ? normalizedError.code.trim() : 'POLZA_EMPTY_TRANSCRIPTION';
+  const finalErrorMessage = truncateMessage(normalizedError.message || 'Empty transcription', 180);
+  const upstreamDetails = normalizedError.details && typeof normalizedError.details === 'object'
+    ? normalizedError.details
+    : null;
+  const attemptsUsed = Number.isSafeInteger(normalizedError.transcriptionAttempts)
+    ? normalizedError.transcriptionAttempts
+    : outcomes.length;
+
+  const classification = classifyEmptyTranscriptionDiagnostics({
+    outcomes,
+    audioBytes,
+    conversationDurationSeconds
+  });
+
+  return {
+    recordFileName,
+    requestId,
+    downloadPath: recordFileName,
+    classification,
+    recoverable: true,
+    audio: {
+      bytes: audioBytes,
+      contentType,
+      conversationDurationSeconds: Number.isFinite(conversationDurationSeconds)
+        ? Number(conversationDurationSeconds.toFixed(2))
+        : null,
+      sha256: fingerprint.sha256,
+      first16Hex: fingerprint.first16Hex
+    },
+    transcribe: {
+      attemptsUsed,
+      requestedModel: isNonEmptyString(requestedModel) ? requestedModel.trim() : '',
+      gatewayPath: isNonEmptyString(aiGatewayTranscribePath) ? aiGatewayTranscribePath.trim() : '/transcribe',
+      finalErrorCode,
+      finalErrorMessage,
+      statusCode: Number.isInteger(normalizedError.statusCode) ? normalizedError.statusCode : null,
+      attemptCodes,
+      upstreamDetails,
+      outcomes
+    }
+  };
+}
+
+function buildEmptyTranscriptionErrorMessage(diagnostics) {
+  const details = diagnostics && typeof diagnostics === 'object' ? diagnostics : {};
+  const classification = isNonEmptyString(details.classification)
+    ? details.classification.trim()
+    : 'empty_transcription_unclassified';
+  const bytes = Number.isSafeInteger(details.audio?.bytes) ? details.audio.bytes : null;
+  const mime = isNonEmptyString(details.audio?.contentType) ? details.audio.contentType.trim() : 'unknown';
+  const convSec = Number.isFinite(details.audio?.conversationDurationSeconds)
+    ? details.audio.conversationDurationSeconds
+    : null;
+  const attempts = Number.isSafeInteger(details.transcribe?.attemptsUsed) ? details.transcribe.attemptsUsed : 0;
+  const attemptCodes = Array.isArray(details.transcribe?.attemptCodes)
+    ? details.transcribe.attemptCodes.join('>')
+    : '';
+  const shaShort = isNonEmptyString(details.audio?.sha256) ? details.audio.sha256.slice(0, 16) : '';
+
+  return truncateMessage(
+    [
+      `class=${classification}`,
+      `mime=${mime}`,
+      `bytes=${bytes !== null ? bytes : 'n/a'}`,
+      `convSec=${convSec !== null ? convSec : 'n/a'}`,
+      `attempts=${attempts}`,
+      `codes=${attemptCodes || 'n/a'}`,
+      `sha16=${shaShort || 'n/a'}`
+    ].join('; '),
+    380
+  );
 }
 
 async function runTranscriptionAttempt({
@@ -950,10 +1491,137 @@ async function runTranscriptionAttempt({
         audioBytes: null,
         errorCode,
         errorMessage: truncateMessage(error?.message || 'Unknown transcription error', 300),
-        statusCode: Number.isInteger(error?.statusCode) ? error.statusCode : null
+        statusCode: Number.isInteger(error?.statusCode) ? error.statusCode : null,
+        errorDetails: (error?.details && typeof error.details === 'object')
+          ? error.details
+          : (error?.responseBody?.details && typeof error.responseBody.details === 'object'
+            ? error.responseBody.details
+            : null)
       }
     };
   }
+}
+
+function isRetryableTranscribeError(error) {
+  const errorCode = isNonEmptyString(error?.code) ? error.code.trim() : '';
+  if (errorCode === 'REQUEST_TIMEOUT') {
+    return true;
+  }
+
+  if (errorCode === 'POLZA_EMPTY_TRANSCRIPTION' || errorCode === 'AI_GATEWAY_EMPTY_TRANSCRIPT') {
+    return true;
+  }
+
+  if (errorCode === 'POLZA_TRANSCRIBE_FAILED' || errorCode === 'AI_GATEWAY_TRANSCRIBE_HTTP_ERROR') {
+    if (!Number.isInteger(error?.statusCode)) {
+      return true;
+    }
+
+    return isRetryableHttpStatus(error.statusCode);
+  }
+
+  return false;
+}
+
+async function runTranscriptionWithRetry({
+  tempFilePath,
+  recordFileName,
+  requestId,
+  callId,
+  aiGatewayUrl,
+  aiGatewaySecret,
+  aiGatewayTranscribePath,
+  transcribeModel,
+  timeoutMs,
+  logger,
+  attempts,
+  baseBackoffMs
+}) {
+  const outcomes = [];
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const run = await runTranscriptionAttempt({
+      tempFilePath,
+      recordFileName,
+      requestId,
+      callId,
+      aiGatewayUrl,
+      aiGatewaySecret,
+      aiGatewayTranscribePath,
+      transcribeModel,
+      timeoutMs
+    });
+
+    outcomes.push({
+      attempt,
+      ...run
+    });
+
+    if (run.ok) {
+      if (attempt > 1) {
+        logger.info('tele2_poll_transcription_recovered_after_retry', {
+          recordFileName,
+          requestId,
+          attempt,
+          maxAttempts: attempts,
+          transcriptLength: run.result.transcript.length
+        });
+      }
+
+      return {
+        ok: true,
+        result: run.result,
+        outcomes
+      };
+    }
+
+    const currentError = run.error || new Error('Transcription attempt failed');
+    if (!isNonEmptyString(currentError.code) && isNonEmptyString(run.outcome?.errorCode)) {
+      currentError.code = run.outcome.errorCode;
+    }
+    if (!Number.isInteger(currentError.statusCode) && Number.isInteger(run.outcome?.statusCode)) {
+      currentError.statusCode = run.outcome.statusCode;
+    }
+
+    lastError = currentError;
+    const retryable = isRetryableTranscribeError(currentError);
+
+    logger.warn('tele2_poll_transcription_attempt_failed', {
+      recordFileName,
+      requestId,
+      attempt,
+      maxAttempts: attempts,
+      retryable,
+      errorCode: isNonEmptyString(currentError.code) ? currentError.code.trim() : '',
+      statusCode: Number.isInteger(currentError.statusCode) ? currentError.statusCode : null,
+      errorMessage: truncateMessage(currentError.message || 'Unknown transcription error', 300)
+    });
+
+    if (!retryable || attempt >= attempts) {
+      return {
+        ok: false,
+        error: currentError,
+        outcomes
+      };
+    }
+
+    const retryDelayMs = buildBackoffMs(baseBackoffMs, attempt);
+    logger.info('tele2_poll_transcription_retry_scheduled', {
+      recordFileName,
+      requestId,
+      attempt,
+      nextAttempt: attempt + 1,
+      retryDelayMs
+    });
+    await delayMs(retryDelayMs);
+  }
+
+  return {
+    ok: false,
+    error: lastError || new Error('Unknown transcription retry failure'),
+    outcomes
+  };
 }
 
 async function sendProcessCall({
@@ -1054,7 +1722,7 @@ async function isPhoneIgnoredPreTranscribe(pool, phone) {
 async function getDedupStatus(pool, recordFileName) {
   const result = await pool.query(
     `
-    SELECT status, attempts
+    SELECT status, attempts, last_error_code, phone_raw, call_datetime_raw
     FROM tele2_polled_records
     WHERE record_file_name = $1
     LIMIT 1
@@ -1065,7 +1733,28 @@ async function getDedupStatus(pool, recordFileName) {
   return result.rows[0] || null;
 }
 
-async function reserveDedupRecord(pool, { recordFileName, retryFailed }) {
+function shouldRetrySkippedByErrorCode(existingStatus, retrySkippedErrorCodes) {
+  if (!existingStatus || existingStatus.status !== 'skipped') {
+    return false;
+  }
+
+  if (!(retrySkippedErrorCodes instanceof Set) || retrySkippedErrorCodes.size === 0) {
+    return false;
+  }
+
+  const normalized = normalizeErrorCodeToken(existingStatus.last_error_code || '');
+  if (!normalized) {
+    return false;
+  }
+
+  return retrySkippedErrorCodes.has(normalized);
+}
+
+async function reserveDedupRecord(pool, {
+  recordFileName,
+  retryFailed,
+  retrySkippedErrorCodes
+}) {
   const inserted = await pool.query(
     `
     INSERT INTO tele2_polled_records (
@@ -1109,6 +1798,33 @@ async function reserveDedupRecord(pool, { recordFileName, retryFailed }) {
       return {
         acquired: true,
         previousStatus: 'failed'
+      };
+    }
+  }
+
+  if (retrySkippedErrorCodes instanceof Set && retrySkippedErrorCodes.size > 0) {
+    const recoverableCodes = Array.from(retrySkippedErrorCodes);
+    const recoveredSkipped = await pool.query(
+      `
+      UPDATE tele2_polled_records
+      SET status = 'processing',
+          attempts = attempts + 1,
+          last_seen_at = NOW(),
+          updated_at = NOW(),
+          last_error_code = NULL,
+          last_error_message = NULL
+      WHERE record_file_name = $1
+        AND status = 'skipped'
+        AND UPPER(COALESCE(last_error_code, '')) = ANY($2::text[])
+      RETURNING status
+      `,
+      [recordFileName, recoverableCodes]
+    );
+
+    if (recoveredSkipped.rowCount > 0) {
+      return {
+        acquired: true,
+        previousStatus: 'skipped'
       };
     }
   }
@@ -1386,7 +2102,10 @@ async function processCandidate({
 
   if (config.dryRun) {
     const existing = await getDedupStatus(pool, recordFileName);
-    if (existing && !(config.retryFailed && existing.status === 'failed')) {
+    const canRetryFailed = config.retryFailed && existing?.status === 'failed';
+    const canRetrySkipped = shouldRetrySkippedByErrorCode(existing, config.retrySkippedErrorCodes);
+
+    if (existing && !canRetryFailed && !canRetrySkipped) {
       stats.dedupSkipped += 1;
       logger.info('tele2_poll_candidate_duplicate', {
         recordFileName,
@@ -1414,7 +2133,8 @@ async function processCandidate({
   } else {
     const lock = await reserveDedupRecord(pool, {
       recordFileName,
-      retryFailed: config.retryFailed
+      retryFailed: config.retryFailed,
+      retrySkippedErrorCodes: config.retrySkippedErrorCodes
     });
 
     if (!lock.acquired) {
@@ -1446,11 +2166,21 @@ async function processCandidate({
     dedupReserved = true;
   }
 
-  const phone = resolvePhoneFromRecord(record);
-  const callDateTime = pickFirstNonEmptyString([
+  let phone = resolvePhoneFromRecord(record);
+  let callDateTime = pickFirstNonEmptyString([
     record?.date,
     record?.callDateTime
   ]);
+
+  if (!phone || !callDateTime) {
+    const statusFallback = await getDedupStatus(pool, recordFileName);
+    if (!phone && isNonEmptyString(statusFallback?.phone_raw)) {
+      phone = statusFallback.phone_raw.trim();
+    }
+    if (!callDateTime && isNonEmptyString(statusFallback?.call_datetime_raw)) {
+      callDateTime = statusFallback.call_datetime_raw.trim();
+    }
+  }
 
   if (!phone || !callDateTime) {
     stats.skipped += 1;
@@ -1570,20 +2300,29 @@ async function processCandidate({
   let audio = null;
 
   try {
-    audio = await downloadTele2Audio({
+    const downloadResult = await downloadTele2AudioWithRetry({
       recordFileName,
       t2BaseUrl: config.t2BaseUrl,
       t2Token: config.t2Token,
       t2AuthScheme: config.t2AuthScheme,
-      timeoutMs: config.timeoutMs
+      timeoutMs: config.timeoutMs,
+      logger,
+      requestId,
+      attempts: config.downloadRetryAttempts,
+      baseBackoffMs: config.downloadRetryBackoffMs
     });
+    audio = downloadResult.audio;
 
     stats.downloaded += 1;
+    if (downloadResult.attemptsUsed > 1) {
+      stats.downloadRetried += 1;
+    }
     logger.info('tele2_poll_candidate_downloaded', {
       recordFileName,
       audioBytes: audio.sizeBytes,
       contentType: audio.contentType,
-      phoneLast4: phoneLast4(phone)
+      phoneLast4: phoneLast4(phone),
+      downloadAttemptsUsed: downloadResult.attemptsUsed
     });
 
     if (audio.sizeBytes < config.minAudioBytes) {
@@ -1618,7 +2357,7 @@ async function processCandidate({
       return;
     }
 
-    const primaryAttempt = await runTranscriptionAttempt({
+    const primaryAttempt = await runTranscriptionWithRetry({
       tempFilePath: audio.tempFilePath,
       recordFileName,
       requestId,
@@ -1627,60 +2366,102 @@ async function processCandidate({
       aiGatewaySecret: config.aiGatewaySecret,
       aiGatewayTranscribePath: config.aiGatewayTranscribePath,
       transcribeModel: config.transcribeModel,
-      timeoutMs: config.timeoutMs
+      timeoutMs: config.timeoutMs,
+      logger,
+      attempts: config.transcribeRetryAttempts,
+      baseBackoffMs: config.transcribeRetryBackoffMs
     });
 
     if (!primaryAttempt.ok) {
-      const primaryError = primaryAttempt.error || new Error('Primary transcription failed');
-      if (!isNonEmptyString(primaryError.code) && isNonEmptyString(primaryAttempt.outcome?.errorCode)) {
-        primaryError.code = primaryAttempt.outcome.errorCode;
+      for (const attemptResult of primaryAttempt.outcomes) {
+        const normalizedOutcome = attemptResult?.outcome || {};
+        const attemptError = attemptResult?.error || {};
+
+        await appendAiUsageAuditSafely(
+          pool,
+          logger,
+          normalizeAiUsagePayload(attemptError.aiUsage, {
+            xRequestId: requestId,
+            callId,
+            operation: 'transcribe',
+            model: normalizedOutcome.model,
+            provider: 'polza',
+            responseStatus: 'failed',
+            durationMs: normalizedOutcome.durationMs,
+            skipReason: ''
+          })
+        );
       }
 
-      if (!Number.isInteger(primaryError.statusCode) && Number.isInteger(primaryAttempt.outcome?.statusCode)) {
-        primaryError.statusCode = primaryAttempt.outcome.statusCode;
+      const finalError = primaryAttempt.error || new Error('Primary transcription failed');
+      finalError.transcriptionOutcomes = primaryAttempt.outcomes.map((item, index) => ({
+        attempt: Number.isSafeInteger(item?.attempt) ? item.attempt : index + 1,
+        status: isNonEmptyString(item?.outcome?.status)
+          ? item.outcome.status.trim()
+          : (item?.ok ? 'success' : 'failed'),
+        model: isNonEmptyString(item?.outcome?.model) ? item.outcome.model.trim() : '',
+        errorCode: isNonEmptyString(item?.outcome?.errorCode)
+          ? item.outcome.errorCode.trim()
+          : (isNonEmptyString(item?.error?.code) ? item.error.code.trim() : ''),
+        statusCode: Number.isInteger(item?.outcome?.statusCode)
+          ? item.outcome.statusCode
+          : (Number.isInteger(item?.error?.statusCode) ? item.error.statusCode : null),
+        durationMs: Number.isSafeInteger(item?.outcome?.durationMs) ? item.outcome.durationMs : null,
+        transcriptLength: Number.isSafeInteger(item?.outcome?.transcriptLength)
+          ? item.outcome.transcriptLength
+          : 0,
+        errorMessage: isNonEmptyString(item?.outcome?.errorMessage)
+          ? truncateMessage(item.outcome.errorMessage, 180)
+          : '',
+        errorDetails: item?.outcome?.errorDetails && typeof item.outcome.errorDetails === 'object'
+          ? item.outcome.errorDetails
+          : null
+      }));
+      finalError.transcriptionAttempts = primaryAttempt.outcomes.length;
+      finalError.transcribeRequestedModel = isNonEmptyString(config.transcribeModel) ? config.transcribeModel : '';
+      finalError.transcribeGatewayPath = config.aiGatewayTranscribePath;
+      finalError.audioBytes = Number.isSafeInteger(audio?.sizeBytes) ? audio.sizeBytes : null;
+      finalError.audioContentType = isNonEmptyString(audio?.contentType) ? audio.contentType : '';
+      finalError.conversationDurationSeconds = conversationGate.durationSeconds;
+      throw finalError;
+    }
+
+    const transcription = primaryAttempt.result;
+
+    let successfulTranscribeOutcome = null;
+    for (const attemptResult of primaryAttempt.outcomes) {
+      const normalizedOutcome = attemptResult?.outcome || {};
+      if (attemptResult.ok && !successfulTranscribeOutcome) {
+        successfulTranscribeOutcome = normalizedOutcome;
       }
 
       await appendAiUsageAuditSafely(
         pool,
         logger,
-        normalizeAiUsagePayload(primaryError.aiUsage, {
+        normalizeAiUsagePayload(attemptResult?.ok ? attemptResult?.result?.aiUsage : attemptResult?.error?.aiUsage, {
           xRequestId: requestId,
           callId,
           operation: 'transcribe',
-          model: primaryAttempt.outcome.model,
+          model: normalizedOutcome.model,
           provider: 'polza',
-          responseStatus: 'failed',
-          durationMs: primaryAttempt.outcome.durationMs
+          responseStatus: attemptResult.ok ? 'success' : 'failed',
+          durationMs: normalizedOutcome.durationMs
         })
       );
-
-      throw primaryError;
     }
 
-    const transcription = primaryAttempt.result;
-
-    await appendAiUsageAuditSafely(
-      pool,
-      logger,
-      normalizeAiUsagePayload(transcription.aiUsage, {
-        xRequestId: requestId,
-        callId,
-        operation: 'transcribe',
-        model: transcription.model || primaryAttempt.outcome.model,
-        provider: 'polza',
-        responseStatus: 'success',
-        durationMs: primaryAttempt.outcome.durationMs
-      })
-    );
-
     stats.transcribed += 1;
+    if (primaryAttempt.outcomes.length > 1) {
+      stats.transcribeRetried += 1;
+    }
     logger.info('tele2_poll_candidate_transcribed', {
       recordFileName,
       transcriptLength: transcription.transcript.length,
       model: transcription.model || 'unknown',
-      durationMs: primaryAttempt.outcome.durationMs,
+      durationMs: successfulTranscribeOutcome?.durationMs ?? null,
       requestedModel: isNonEmptyString(config.transcribeModel) ? config.transcribeModel : '',
-      phoneLast4: phoneLast4(phone)
+      phoneLast4: phoneLast4(phone),
+      transcribeAttemptsUsed: primaryAttempt.outcomes.length
     });
 
     let compareAttempt = null;
@@ -1806,6 +2587,20 @@ async function processCandidate({
   } catch (error) {
     const errorCode = isNonEmptyString(error?.code) ? error.code.trim() : 'TELE2_POLL_RECORD_FAILED';
     const errorMessage = truncateMessage(error?.message || 'Unknown error');
+    const emptyDiagnostics = isEmptyTranscriptionCode(errorCode)
+      ? buildEmptyTranscriptionDiagnostics({
+        recordFileName,
+        requestId,
+        error,
+        audio,
+        conversationDurationSeconds: conversationGate.durationSeconds,
+        requestedModel: isNonEmptyString(config.transcribeModel) ? config.transcribeModel : '',
+        aiGatewayTranscribePath: config.aiGatewayTranscribePath
+      })
+      : null;
+    const errorMessageForDedup = emptyDiagnostics
+      ? buildEmptyTranscriptionErrorMessage(emptyDiagnostics)
+      : errorMessage;
 
     if (shouldMarkAsSkipped(error)) {
       stats.skipped += 1;
@@ -1822,6 +2617,10 @@ async function processCandidate({
       error: serializeError(error)
     });
 
+    if (emptyDiagnostics) {
+      logger.warn('tele2_poll_empty_transcription_diagnostics', emptyDiagnostics);
+    }
+
     const preTranscribeSkipReason = resolvePreTranscribeSkipReasonFromError(error);
     if (preTranscribeSkipReason) {
       await appendAiUsageAuditSafely(pool, logger, {
@@ -1830,6 +2629,18 @@ async function processCandidate({
         operation: 'transcribe',
         responseStatus: 'skipped',
         skipReason: preTranscribeSkipReason
+      });
+    } else if (
+      errorCode.startsWith('T2_')
+      || errorCode === 'REQUEST_TIMEOUT'
+      || errorCode === 'TELE2_POLL_RECORD_FAILED'
+    ) {
+      await appendAiUsageAuditSafely(pool, logger, {
+        xRequestId: requestId,
+        callId,
+        operation: 'transcribe',
+        responseStatus: 'failed',
+        skipReason: `download_or_pretranscribe_error:${errorCode}`
       });
     }
 
@@ -1840,7 +2651,7 @@ async function processCandidate({
         phoneRaw: phone,
         callDateTimeRaw: callDateTime,
         errorCode,
-        errorMessage
+        errorMessage: errorMessageForDedup
       });
     }
   } finally {
@@ -1859,6 +2670,7 @@ async function processCandidate({
 
 function buildDefaultsFromEnv() {
   return {
+    recordFileNames: [],
     t2BaseUrl: process.env.T2_API_BASE_URL || DEFAULT_T2_BASE_URL,
     t2Token: process.env.T2_API_TOKEN || process.env.T2_ACCESS_TOKEN || '',
     t2AuthScheme: process.env.T2_AUTH_SCHEME || 'plain',
@@ -1883,6 +2695,32 @@ function buildDefaultsFromEnv() {
       'TELE2_POLL_MIN_AUDIO_BYTES',
       DEFAULT_MIN_AUDIO_BYTES
     ),
+    downloadRetryAttempts: parsePositiveInt(
+      process.env.TELE2_POLL_DOWNLOAD_RETRY_ATTEMPTS,
+      'TELE2_POLL_DOWNLOAD_RETRY_ATTEMPTS',
+      DEFAULT_DOWNLOAD_RETRY_ATTEMPTS
+    ),
+    downloadRetryBackoffMs: parsePositiveInt(
+      process.env.TELE2_POLL_DOWNLOAD_RETRY_BACKOFF_MS,
+      'TELE2_POLL_DOWNLOAD_RETRY_BACKOFF_MS',
+      DEFAULT_DOWNLOAD_RETRY_BACKOFF_MS
+    ),
+    transcribeRetryAttempts: parsePositiveInt(
+      process.env.TELE2_POLL_TRANSCRIBE_RETRY_ATTEMPTS,
+      'TELE2_POLL_TRANSCRIBE_RETRY_ATTEMPTS',
+      DEFAULT_TRANSCRIBE_RETRY_ATTEMPTS
+    ),
+    transcribeRetryBackoffMs: parsePositiveInt(
+      process.env.TELE2_POLL_TRANSCRIBE_RETRY_BACKOFF_MS,
+      'TELE2_POLL_TRANSCRIBE_RETRY_BACKOFF_MS',
+      DEFAULT_TRANSCRIBE_RETRY_BACKOFF_MS
+    ),
+    replayFetchLimit: parsePositiveInt(
+      process.env.TELE2_POLL_REPLAY_FETCH_LIMIT,
+      'TELE2_POLL_REPLAY_FETCH_LIMIT',
+      DEFAULT_REPLAY_FETCH_LIMIT
+    ),
+    retrySkippedErrorCodes: parseErrorCodeList(process.env.TELE2_POLL_RETRY_SKIPPED_ERROR_CODES || ''),
     dryRun: parseBoolean(process.env.TELE2_POLL_DRY_RUN, false),
     retryFailed: parseBoolean(process.env.TELE2_POLL_RETRY_FAILED, true),
     timezoneOffset: process.env.T2_TIMEZONE_OFFSET || DEFAULT_TIMEZONE_OFFSET,
@@ -1941,6 +2779,22 @@ function validateRuntimeConfig(rawConfig) {
 
   const normalizedConfig = {
     ...rawConfig,
+    recordFileNames: Array.isArray(rawConfig.recordFileNames)
+      ? Array.from(
+        new Set(
+          rawConfig.recordFileNames
+            .map((item) => normalizeRecordFileName(item))
+            .filter(Boolean)
+        )
+      )
+      : [],
+    retrySkippedErrorCodes: new Set(
+      Array.isArray(rawConfig.retrySkippedErrorCodes)
+        ? rawConfig.retrySkippedErrorCodes
+          .map((item) => normalizeErrorCodeToken(item))
+          .filter(Boolean)
+        : []
+    ),
     t2AuthScheme: authScheme,
     t2BaseUrl: rawConfig.t2BaseUrl.trim(),
     t2Token: rawConfig.t2Token.trim(),
@@ -1975,10 +2829,17 @@ Usage:
 Options:
   --dry-run                          Run full fetch/download/transcribe flow, skip /api/process-call
   --no-dry-run                       Force live mode (default)
+  --record-file-name <value>         Replay explicit recordFileName (repeatable, supports comma list)
   --lookback-minutes <int>           Lookback window for call-records/info
   --fetch-limit <int>                Tele2 info page size
   --max-candidates <int>             Max unique records to process from fetched list
   --min-audio-bytes <int>            Skip too-small audio files
+  --download-retry-attempts <int>    Retry attempts for Tele2 file download (default: ${DEFAULT_DOWNLOAD_RETRY_ATTEMPTS})
+  --download-retry-backoff-ms <int>  Base backoff for Tele2 file retry (default: ${DEFAULT_DOWNLOAD_RETRY_BACKOFF_MS})
+  --transcribe-retry-attempts <int>  Retry attempts for transcription errors (default: ${DEFAULT_TRANSCRIBE_RETRY_ATTEMPTS})
+  --transcribe-retry-backoff-ms <int> Base backoff for transcription retry (default: ${DEFAULT_TRANSCRIBE_RETRY_BACKOFF_MS})
+  --retry-skipped-error-codes <csv>  Allow replay of skipped records by last_error_code (example: POLZA_EMPTY_TRANSCRIPTION)
+  --replay-fetch-limit <int>         Tele2 info page size used in replay mode (default: ${DEFAULT_REPLAY_FETCH_LIMIT})
                                      Calls are analyzed only when conversation duration > 10 seconds
                                      and call is not marked as unanswered/missed by Tele2 metadata.
   --timeout-ms <int>                 HTTP timeout in ms
@@ -2025,9 +2886,14 @@ async function main() {
     fetched: 0,
     candidateRecords: 0,
     selectedRecords: 0,
+    replayRequestedRecords: 0,
+    replayResolvedRecords: 0,
+    replayMissingRecords: 0,
     dedupSkipped: 0,
     downloaded: 0,
+    downloadRetried: 0,
     transcribed: 0,
+    transcribeRetried: 0,
     compareAttempted: 0,
     compareSuccess: 0,
     compareEmpty: 0,
@@ -2045,10 +2911,18 @@ async function main() {
 
   logger.info('tele2_poll_once_started', {
     dryRun: config.dryRun,
+    replayMode: config.recordFileNames.length > 0,
+    replayRecordCount: config.recordFileNames.length,
     lookbackMinutes: config.lookbackMinutes,
     fetchLimit: config.fetchLimit,
+    replayFetchLimit: config.replayFetchLimit,
     maxCandidates: config.maxCandidates,
     minAudioBytes: config.minAudioBytes,
+    downloadRetryAttempts: config.downloadRetryAttempts,
+    downloadRetryBackoffMs: config.downloadRetryBackoffMs,
+    transcribeRetryAttempts: config.transcribeRetryAttempts,
+    transcribeRetryBackoffMs: config.transcribeRetryBackoffMs,
+    retrySkippedErrorCodes: Array.from(config.retrySkippedErrorCodes),
     minConversationDurationSecondsExclusive: MIN_CONVERSATION_DURATION_SECONDS,
     retryFailed: config.retryFailed,
     transcribeModel: isNonEmptyString(config.transcribeModel) ? config.transcribeModel : '',
@@ -2060,50 +2934,87 @@ async function main() {
   try {
     await ensureTele2DedupTable(pool);
 
-    const fetched = await fetchTele2Records({
-      t2BaseUrl: config.t2BaseUrl,
-      t2Token: config.t2Token,
-      t2AuthScheme: config.t2AuthScheme,
-      timeoutMs: config.timeoutMs,
-      start: window.start,
-      end: window.end,
-      fetchLimit: config.fetchLimit
-    });
-
-    stats.fetched = fetched.length;
-
-    const uniqueRecords = [];
-    const seen = new Set();
+    const selected = [];
     let skippedWithoutRecordName = 0;
 
-    for (const item of fetched) {
-      const recordFileName = normalizeRecordFileName(item?.recordFileName);
-      if (!recordFileName) {
-        skippedWithoutRecordName += 1;
-        continue;
+    if (config.recordFileNames.length > 0) {
+      const replaySet = new Set(config.recordFileNames);
+      stats.replayRequestedRecords = replaySet.size;
+
+      for (const recordFileName of replaySet) {
+        const resolved = await fetchTele2RecordByFileName({
+          recordFileName,
+          t2BaseUrl: config.t2BaseUrl,
+          t2Token: config.t2Token,
+          t2AuthScheme: config.t2AuthScheme,
+          timeoutMs: config.timeoutMs,
+          offsetMeta: config.offsetMeta,
+          fetchLimit: config.replayFetchLimit
+        });
+
+        if (resolved) {
+          stats.replayResolvedRecords += 1;
+          selected.push(resolved);
+          continue;
+        }
+
+        stats.replayMissingRecords += 1;
+        selected.push({ recordFileName });
       }
 
-      if (seen.has(recordFileName)) {
-        continue;
+      stats.candidateRecords = selected.length;
+      stats.selectedRecords = selected.length;
+
+      logger.info('tele2_poll_once_replay_candidates_built', {
+        replayRequestedRecords: stats.replayRequestedRecords,
+        replayResolvedRecords: stats.replayResolvedRecords,
+        replayMissingRecords: stats.replayMissingRecords
+      });
+    } else {
+      const fetched = await fetchTele2Records({
+        t2BaseUrl: config.t2BaseUrl,
+        t2Token: config.t2Token,
+        t2AuthScheme: config.t2AuthScheme,
+        timeoutMs: config.timeoutMs,
+        start: window.start,
+        end: window.end,
+        fetchLimit: config.fetchLimit
+      });
+
+      stats.fetched = fetched.length;
+
+      const uniqueRecords = [];
+      const seen = new Set();
+
+      for (const item of fetched) {
+        const recordFileName = normalizeRecordFileName(item?.recordFileName);
+        if (!recordFileName) {
+          skippedWithoutRecordName += 1;
+          continue;
+        }
+
+        if (seen.has(recordFileName)) {
+          continue;
+        }
+
+        seen.add(recordFileName);
+        uniqueRecords.push({
+          ...item,
+          recordFileName
+        });
       }
 
-      seen.add(recordFileName);
-      uniqueRecords.push({
-        ...item,
-        recordFileName
+      stats.candidateRecords = uniqueRecords.length;
+      selected.push(...uniqueRecords.slice(0, config.maxCandidates));
+      stats.selectedRecords = selected.length;
+
+      logger.info('tele2_poll_once_candidates_built', {
+        fetchedCount: stats.fetched,
+        candidateRecords: stats.candidateRecords,
+        selectedRecords: stats.selectedRecords,
+        skippedWithoutRecordName
       });
     }
-
-    stats.candidateRecords = uniqueRecords.length;
-    const selected = uniqueRecords.slice(0, config.maxCandidates);
-    stats.selectedRecords = selected.length;
-
-    logger.info('tele2_poll_once_candidates_built', {
-      fetchedCount: stats.fetched,
-      candidateRecords: stats.candidateRecords,
-      selectedRecords: stats.selectedRecords,
-      skippedWithoutRecordName
-    });
 
     for (const record of selected) {
       await processCandidate({
@@ -2112,6 +3023,16 @@ async function main() {
         logger,
         pool,
         stats
+      });
+    }
+
+    if (stats.failed > 0 || stats.skipped > 0) {
+      logger.warn('tele2_poll_once_failure_signal_detected', {
+        failed: stats.failed,
+        skipped: stats.skipped,
+        downloadRetried: stats.downloadRetried,
+        transcribeRetried: stats.transcribeRetried,
+        replayMode: config.recordFileNames.length > 0
       });
     }
 
@@ -2154,5 +3075,13 @@ if (require.main === module) {
 module.exports = {
   resolvePhoneFromRecord,
   buildProcessCallPayload,
-  sendProcessCall
+  sendProcessCall,
+  downloadTele2AudioWithRetry,
+  runTranscriptionWithRetry,
+  isRetryableDownloadError,
+  isRetryableTranscribeError,
+  isEmptyTranscriptionCode,
+  classifyEmptyTranscriptionDiagnostics,
+  buildEmptyTranscriptionDiagnostics,
+  buildEmptyTranscriptionErrorMessage
 };

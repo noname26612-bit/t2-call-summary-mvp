@@ -15,6 +15,97 @@ function normalizeOptionalString(value) {
   return isNonEmptyString(value) ? value.trim() : '';
 }
 
+function normalizeOptionalBoolean(value) {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  if (typeof value === 'number') {
+    if (value === 1) {
+      return true;
+    }
+
+    if (value === 0) {
+      return false;
+    }
+  }
+
+  if (isNonEmptyString(value)) {
+    const normalized = value.trim().toLowerCase();
+    if (['1', 'true', 'yes', 'y', 'да'].includes(normalized)) {
+      return true;
+    }
+
+    if (['0', 'false', 'no', 'n', 'нет'].includes(normalized)) {
+      return false;
+    }
+  }
+
+  return null;
+}
+
+function normalizeOptionalInteger(value) {
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+    return Math.round(value);
+  }
+
+  if (isNonEmptyString(value) && /^[0-9]+$/.test(value.trim())) {
+    const parsed = Number.parseInt(value.trim(), 10);
+    if (Number.isSafeInteger(parsed) && parsed >= 0) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+function normalizeEmployeeHint(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  const employeeName = normalizeOptionalString(value.employeeName);
+  const employeeTitle = normalizeOptionalString(value.employeeTitle);
+  const phoneNormalized = normalizeOptionalString(value.phoneNormalized);
+
+  if (!employeeName && !employeeTitle && !phoneNormalized) {
+    return null;
+  }
+
+  return {
+    ...(employeeName ? { employeeName } : {}),
+    ...(employeeTitle ? { employeeTitle } : {}),
+    ...(phoneNormalized ? { phoneNormalized } : {})
+  };
+}
+
+function normalizeAnalyzeBypassHint(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  const reason = normalizeOptionalString(value.reason);
+  const signalType = normalizeOptionalString(value.signalType);
+  const transcriptLength = normalizeOptionalInteger(value.transcriptLength);
+  const wordsCount = normalizeOptionalInteger(value.wordsCount);
+  const meaningfulWordsCount = normalizeOptionalInteger(value.meaningfulWordsCount);
+  const minTranscriptChars = normalizeOptionalInteger(value.minTranscriptChars);
+
+  if (!reason && !signalType && transcriptLength === null && wordsCount === null
+      && meaningfulWordsCount === null && minTranscriptChars === null) {
+    return null;
+  }
+
+  return {
+    ...(reason ? { reason } : {}),
+    ...(signalType ? { signalType } : {}),
+    ...(transcriptLength !== null ? { transcriptLength } : {}),
+    ...(wordsCount !== null ? { wordsCount } : {}),
+    ...(meaningfulWordsCount !== null ? { meaningfulWordsCount } : {}),
+    ...(minTranscriptChars !== null ? { minTranscriptChars } : {})
+  };
+}
+
 function buildValidationErrors(payload) {
   const errors = [];
 
@@ -87,6 +178,9 @@ function sendKnownError(res, error, logger, requestId) {
     if (error.aiUsage && typeof error.aiUsage === 'object') {
       errorPayload.aiUsage = error.aiUsage;
     }
+    if (error.details && typeof error.details === 'object') {
+      errorPayload.details = error.details;
+    }
 
     return res.status(error.statusCode).json(errorPayload);
   }
@@ -152,7 +246,22 @@ function createApp({ config, logger, analyzeCall, transcribeAudio }) {
         analyzeModel: normalizeOptionalString(payload.analyzeModel) || normalizeOptionalString(payload.model),
         phone: normalizeOptionalString(payload.phone),
         callDateTime: normalizeOptionalString(payload.callDateTime),
-        transcript: payload.transcript.trim()
+        transcript: payload.transcript.trim(),
+        callType: normalizeOptionalString(payload.callType),
+        callerNumber: normalizeOptionalString(payload.callerNumber),
+        calleeNumber: normalizeOptionalString(payload.calleeNumber),
+        destinationNumber: normalizeOptionalString(payload.destinationNumber),
+        durationSec: normalizeOptionalInteger(payload.durationSec),
+        answered: normalizeOptionalBoolean(payload.answered),
+        noAnswer: normalizeOptionalBoolean(payload.noAnswer),
+        employeePhone: normalizeOptionalString(payload.employeePhone),
+        clientPhone: normalizeOptionalString(payload.clientPhone),
+        transcriptLength: normalizeOptionalInteger(payload.transcriptLength),
+        shortCall: normalizeOptionalBoolean(payload.shortCall),
+        callDirectionContext: normalizeOptionalString(payload.callDirectionContext),
+        whoCalledWhom: normalizeOptionalString(payload.whoCalledWhom),
+        employee: normalizeEmployeeHint(payload.employee),
+        analyzeBypassHint: normalizeAnalyzeBypassHint(payload.analyzeBypassHint)
       });
 
       return res.status(200).json(analysis);

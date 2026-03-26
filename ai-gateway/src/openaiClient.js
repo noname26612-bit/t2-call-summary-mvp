@@ -14,14 +14,25 @@ const ANALYSIS_CATEGORIES = Object.freeze([
 ]);
 
 const ANALYSIS_PRIORITIES = Object.freeze(['low', 'medium', 'high']);
-const PRIMARY_SCENARIOS = Object.freeze(['Запчасти', 'Аренда', 'Ремонт', 'Доставка', 'Другое']);
+const PRIMARY_SCENARIOS = Object.freeze([
+  'Запчасти',
+  'Аренда',
+  'Ремонт',
+  'Заказ / производство',
+  'Доставка',
+  'Другое'
+]);
 const REPAIR_TYPES = Object.freeze(['капитальный', 'выездной']);
 
 const MAX_TEXT_LENGTH = Object.freeze({
   topic: 80,
+  callEssence: 220,
+  whatDiscussed: 280,
   summary: 220,
+  result: 280,
   outcome: 180,
   nextStep: 180,
+  importantNote: 180,
   transcriptPlain: 20000,
   participantsAssumption: 120,
   detectedClientSpeaker: 80,
@@ -55,19 +66,30 @@ const ANALYSIS_SCHEMA = {
   additionalProperties: false,
   required: [
     'category',
-    'topic',
-    'summary',
+    'scenario',
+    'callEssence',
+    'whatDiscussed',
     'outcome',
-    'nextStep',
-    'priority',
-    'tags',
-    'primaryScenario',
-    'wantedSummary'
+    'confidence'
   ],
   properties: {
     category: {
       type: 'string',
       enum: ANALYSIS_CATEGORIES
+    },
+    scenario: {
+      type: 'string',
+      enum: PRIMARY_SCENARIOS
+    },
+    callEssence: {
+      type: 'string',
+      minLength: 1,
+      maxLength: MAX_TEXT_LENGTH.callEssence
+    },
+    whatDiscussed: {
+      type: 'string',
+      minLength: 1,
+      maxLength: MAX_TEXT_LENGTH.whatDiscussed
     },
     topic: {
       type: 'string',
@@ -83,6 +105,21 @@ const ANALYSIS_SCHEMA = {
       type: 'string',
       minLength: 1,
       maxLength: MAX_TEXT_LENGTH.outcome
+    },
+    importantNote: {
+      type: 'string',
+      minLength: 1,
+      maxLength: MAX_TEXT_LENGTH.importantNote
+    },
+    confidence: {
+      type: 'number',
+      minimum: 0,
+      maximum: 1
+    },
+    result: {
+      type: 'string',
+      minLength: 1,
+      maxLength: MAX_TEXT_LENGTH.result
     },
     nextStep: {
       type: 'string',
@@ -112,76 +149,6 @@ const ANALYSIS_SCHEMA = {
       minLength: 1,
       maxLength: MAX_TEXT_LENGTH.wantedSummary
     },
-    participantsAssumption: {
-      type: 'string',
-      minLength: 1,
-      maxLength: MAX_TEXT_LENGTH.participantsAssumption
-    },
-    detectedClientSpeaker: {
-      type: 'string',
-      minLength: 1,
-      maxLength: MAX_TEXT_LENGTH.detectedClientSpeaker
-    },
-    detectedEmployeeSpeaker: {
-      type: 'string',
-      minLength: 1,
-      maxLength: MAX_TEXT_LENGTH.detectedEmployeeSpeaker
-    },
-    speakerRoleConfidence: {
-      type: 'number',
-      minimum: 0,
-      maximum: 1
-    },
-    clientGoal: {
-      type: 'string',
-      minLength: 1,
-      maxLength: MAX_TEXT_LENGTH.clientGoal
-    },
-    employeeResponse: {
-      type: 'string',
-      minLength: 1,
-      maxLength: MAX_TEXT_LENGTH.employeeResponse
-    },
-    issueReason: {
-      type: 'string',
-      minLength: 1,
-      maxLength: MAX_TEXT_LENGTH.issueReason
-    },
-    nextStepStructured: {
-      type: 'string',
-      minLength: 1,
-      maxLength: MAX_TEXT_LENGTH.nextStepStructured
-    },
-    reconstructedTurns: {
-      type: 'array',
-      maxItems: 20,
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['speaker', 'role', 'text', 'confidence'],
-        properties: {
-          speaker: {
-            type: 'string',
-            minLength: 1,
-            maxLength: MAX_TEXT_LENGTH.reconstructedTurnSpeaker
-          },
-          role: {
-            type: 'string',
-            enum: ['client', 'employee', 'unknown']
-          },
-          text: {
-            type: 'string',
-            minLength: 1,
-            maxLength: MAX_TEXT_LENGTH.reconstructedTurnText
-          },
-          confidence: {
-            type: 'number',
-            minimum: 0,
-            maximum: 1
-          }
-        }
-      }
-    },
     analysisWarnings: {
       type: 'array',
       maxItems: 8,
@@ -190,123 +157,44 @@ const ANALYSIS_SCHEMA = {
         minLength: 1,
         maxLength: MAX_TEXT_LENGTH.analysisWarningItem
       }
-    },
-    partsRequested: {
-      type: 'array',
-      maxItems: 10,
-      items: {
-        type: 'string',
-        minLength: 1,
-        maxLength: MAX_TEXT_LENGTH.partsItem
-      }
-    },
-    rentalStart: {
-      type: 'string',
-      minLength: 1,
-      maxLength: MAX_TEXT_LENGTH.rentalStart
-    },
-    rentalDuration: {
-      type: 'string',
-      minLength: 1,
-      maxLength: MAX_TEXT_LENGTH.rentalDuration
-    },
-    rentalAddress: {
-      type: 'string',
-      minLength: 1,
-      maxLength: MAX_TEXT_LENGTH.rentalAddress
-    },
-    repairEquipment: {
-      type: 'string',
-      minLength: 1,
-      maxLength: MAX_TEXT_LENGTH.repairEquipment
-    },
-    repairDateOrTerm: {
-      type: 'string',
-      minLength: 1,
-      maxLength: MAX_TEXT_LENGTH.repairDateOrTerm
-    },
-    repairType: {
-      type: 'string',
-      enum: REPAIR_TYPES
-    },
-    repairAddress: {
-      type: 'string',
-      minLength: 1,
-      maxLength: MAX_TEXT_LENGTH.repairAddress
-    },
-    deliveryDetails: {
-      type: 'string',
-      minLength: 1,
-      maxLength: MAX_TEXT_LENGTH.deliveryDetails
-    },
-    companyName: {
-      type: 'string',
-      minLength: 1,
-      maxLength: MAX_TEXT_LENGTH.companyName
-    },
-    orderNumber: {
-      type: 'string',
-      minLength: 1,
-      maxLength: MAX_TEXT_LENGTH.orderNumber
     }
   }
 };
 
 const SYSTEM_PROMPT = `
-Ты анализатор телефонных разговоров.
+Ты готовишь краткий рабочий отчет по звонку для памяти менеджера.
+Формат: report-oriented, не action-oriented.
+Не навязывай "следующий шаг", не пиши канцелярит, не выдумывай детали.
 Верни строго JSON-объект без markdown и без пояснений.
 
-Поле category: одно значение из [продажа, сервис, запчасти, аренда, спам, прочее].
-Поле priority: одно значение из [low, medium, high].
-Поле tags: массив строк от 1 до 5 тегов без дублей.
-Поле primaryScenario: одно значение из [Запчасти, Аренда, Ремонт, Доставка, Другое].
-Поле wantedSummary: 2-4 короткие строки по сути запроса без воды.
-Поле participantsAssumption: коротко зафиксируй рабочее предположение о составе участников (по умолчанию 2: клиент и сотрудник).
-Поля detectedClientSpeaker / detectedEmployeeSpeaker: укажи условные метки говорящих (например "S1"/"S2"), если удалось определить.
-Поле speakerRoleConfidence: уверенность в назначении ролей (0..1).
-Поля clientGoal / employeeResponse / issueReason / outcome / nextStepStructured:
-- что хотел клиент;
-- что ответил сотрудник;
-- в чем суть проблемы/запроса;
-- чем закончился разговор;
-- есть ли явный следующий шаг.
-Поле reconstructedTurns: 3-20 реплик в порядке разговора (speaker, role, text, confidence optional).
-Поле analysisWarnings: неопределенности/сомнения (например низкая уверенность роли, шумный транскрипт, мало фактов).
+Обязательные поля:
+- category: одно значение из [продажа, сервис, запчасти, аренда, спам, прочее].
+- scenario: одно значение из [Запчасти, Аренда, Ремонт, Заказ / производство, Доставка, Другое].
+- callEssence: 1 короткая фраза "о чем звонок" (для строки "Суть звонка").
+- whatDiscussed: 1-2 короткие фразы "что конкретно обсуждали".
+- outcome: 1 короткая фраза "чем закончилось".
+- confidence: число 0..1.
 
-Правила по сценариям:
-- один звонок = один primaryScenario
-- всё, что не входит в primaryScenario, оставляй в wantedSummary
-- Запчасти: используй partsRequested (список, без дублей, не выдумывать)
-- Аренда: используй rentalStart / rentalDuration / rentalAddress по фактам из звонка
-- Ремонт: используй repairEquipment / repairDateOrTerm / repairType / repairAddress
-- Доставка: используй deliveryDetails только если есть конкретика; не пиши шаблон "Уточнение по доставке: Вопросы по доставке"
-- companyName и orderNumber заполняй только если эти данные явно и дословно прозвучали в разговоре
-- если явного упоминания нет, не заполняй эти поля
+Опционально:
+- importantNote: только если реально нужна важная пометка:
+  - часть разговора неразборчива;
+  - термин/название распознано неуверенно;
+  - разговор очень короткий и контекста мало;
+  - иная критичная оговорка для памяти.
+- topic / tags / priority / primaryScenario / wantedSummary / summary / result / nextStep можно заполнять кратко для совместимости.
 
-Правила по датам:
-- если дата точная, передавай точную дату
-- если время относительное и точное (например "через 3 дня"), считай от callDateTime
-- если срок неточный (например "через 2-3 недели"), не придумывай точную дату, оставляй текстом (например "примерно через 2-3 недели")
-
-Правила роли/диалога:
-- не используй внешние знания, опирайся только на transcript и служебные подсказки.
-- не выдумывай реплики, которых нет; reconstructedTurns — краткая реконструкция по фактам.
-- если уверенность в ролях низкая (< 0.5), явно укажи это в analysisWarnings и не делай уверенных утверждений.
-- если передан employee hint (имя/должность/номер), используй его как подсказку, но не как абсолютный факт.
-
-Если данных мало, ставь:
-- category: "прочее"
-- priority: "low"
-- primaryScenario: "Другое"
-- нейтральные формулировки в summary/outcome/nextStep/wantedSummary.
-- speakerRoleConfidence <= 0.5 и минимум одно предупреждение в analysisWarnings.
+Жесткие правила:
+- не додумывай факты, которых нет в transcript.
+- если данных мало, пиши сдержанно и коротко.
+- избегай формулировок вида "Итог по фактам", "По разговору запрос", "Неопределенность", "Основная тема".
+- если разговор технический/короткий, фиксируй это прямо и без лишней аналитики.
 `;
 
 const PRIMARY_SCENARIO_BY_CATEGORY = Object.freeze({
   запчасти: 'Запчасти',
   аренда: 'Аренда',
   сервис: 'Ремонт',
-  продажа: 'Другое',
+  продажа: 'Заказ / производство',
   спам: 'Другое',
   прочее: 'Другое'
 });
@@ -321,6 +209,12 @@ const PRIMARY_SCENARIO_ALIASES = Object.freeze({
   ремонт: 'Ремонт',
   сервис: 'Ремонт',
   service: 'Ремонт',
+  заказ: 'Заказ / производство',
+  производство: 'Заказ / производство',
+  партия: 'Заказ / производство',
+  запуск: 'Заказ / производство',
+  заказ_производство: 'Заказ / производство',
+  order_production: 'Заказ / производство',
   доставка: 'Доставка',
   логистика: 'Доставка',
   delivery: 'Доставка',
@@ -341,6 +235,156 @@ const EMPTY_OPTIONAL_TEXT_TOKENS = new Set([
   'null',
   'undefined'
 ]);
+
+const BYPASS_REASON = Object.freeze({
+  PRE_ANALYZE_HINT: 'bypass:pre_analyze_hint',
+  SHORT_OR_WEAK_TRANSCRIPT: 'bypass:short_or_weak_transcript',
+  SHORT_CALL_TECHNICAL: 'bypass:short_call_technical'
+});
+
+const CALLBACK_OR_TRANSFER_PATTERNS = [
+  /перезвон/,
+  /позвоните позже/,
+  /созвон(?:имся|итесь|иться) позже/,
+  /перенес(?:ем|ли|ите)/,
+  /потом/,
+  /позже/,
+  /неудобно говорить/,
+  /занят/,
+  /на совещани[еи]/,
+  /сейчас не могу/
+];
+
+const CALLBACK_TIME_HINT_PATTERNS = [
+  /через\s+[а-яё0-9]+\s*(?:минут[ауы]?|час[ао]?[в]?)/i,
+  /(?:сегодня\s+вечером|вечером|завтра(?:\s+утром|\s+днем|\s+вечером)?|после\s+обеда)/i,
+  /(?:после|к)\s+\d{1,2}(?::|\.)\d{2}/i,
+  /в\s+\d{1,2}(?::|\.)\d{2}/i
+];
+
+const WRONG_NUMBER_PATTERNS = [
+  /ошиб(?:лись|ся)\s+номер(?:ом)?/,
+  /не\s+туда\s+попал(?:и)?/,
+  /ошибочн(?:ый|ое)\s+номер/,
+  /не\s+тому\s+позвонил(?:и)?/
+];
+
+const BUSY_OR_INCONVENIENT_PATTERNS = [
+  /неудобно\s+говорить/,
+  /сейчас\s+не\s+могу/,
+  /занят[аы]?/,
+  /на\s+совещани[еи]/,
+  /за\s+рулем/,
+  /без\s+возможности\s+говорить/
+];
+
+const SEND_INFO_PATTERNS = [
+  /пришл(?:ите|и)/,
+  /отправ(?:ьте|ь)/,
+  /вышл(?:ите|и)/,
+  /напиш(?:ите|и)/,
+  /скин(?:ьте|ь)/,
+  /в\s+whatsapp/,
+  /в\s+ватсап/,
+  /в\s+telegram/,
+  /в\s+телеграм/,
+  /на\s+почту/
+];
+
+const DISCUSS_LATER_PATTERNS = [
+  /обсудим\s+позже/,
+  /позже\s+обсудим/,
+  /верн[её]мся\s+к\s+вопросу\s+позже/,
+  /созвон(?:имся|итесь)\s+позже/,
+  /потом\s+обсудим/
+];
+
+const PRICE_SIGNAL_TOKENS = [
+  'цена',
+  'стоим',
+  'руб',
+  'тыс',
+  'тысяч'
+];
+
+const TERM_SIGNAL_TOKENS = [
+  'срок',
+  'день',
+  'дня',
+  'дней',
+  'недел',
+  'отгруз',
+  'выезд',
+  'достав',
+  'запуск'
+];
+
+const ORDER_PRODUCTION_SIGNAL_TOKENS = [
+  'заказ',
+  'парт',
+  'производств',
+  'запуск',
+  'комплектност',
+  'изготов',
+  'тираж',
+  'количеств'
+];
+
+const DELIVERY_SIGNAL_TOKENS = [
+  'доставк',
+  'логист',
+  'самовывоз',
+  'погруз',
+  'разгруз',
+  'курьер',
+  'маршрут',
+  'водител',
+  'отгруз'
+];
+
+const WEAK_AUDIO_PATTERNS = [
+  /не слышно/,
+  /плохо слышно/,
+  /связь плохая/,
+  /шум/,
+  /прерыва(ется|ется)/,
+  /тихо/,
+  /эхо/
+];
+
+const NO_SUBJECT_PATTERNS = [
+  /алло/,
+  /ага/,
+  /угу/,
+  /до связи/,
+  /спасибо/,
+  /пока/
+];
+
+const BUSINESS_WORD_PREFIXES = [
+  'аренд',
+  'прокат',
+  'ремонт',
+  'сервис',
+  'запчаст',
+  'достав',
+  'заказ',
+  'цен',
+  'стоим',
+  'коммерч',
+  'договор',
+  'счет',
+  'оплат',
+  'клиент',
+  'техник',
+  'погруз',
+  'экскават',
+  'трактор',
+  'детал',
+  'масл',
+  'фильтр',
+  'подшип'
+];
 
 class OpenAIClientError extends Error {
   constructor(message, statusCode = 502, code = 'POLZA_CLIENT_ERROR') {
@@ -494,6 +538,550 @@ function normalizeDurationMs(value) {
   }
 
   return Math.max(0, Math.round(value));
+}
+
+function normalizeOptionalInteger(value) {
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+    return Math.round(value);
+  }
+
+  if (isNonEmptyString(value)) {
+    const normalized = value.trim().replace(',', '.');
+    if (/^[0-9]+(?:\.[0-9]+)?$/.test(normalized)) {
+      const parsed = Number.parseFloat(normalized);
+      if (Number.isFinite(parsed) && parsed >= 0) {
+        return Math.round(parsed);
+      }
+    }
+  }
+
+  return null;
+}
+
+function normalizeOptionalBoolean(value) {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  if (typeof value === 'number') {
+    if (value === 1) {
+      return true;
+    }
+
+    if (value === 0) {
+      return false;
+    }
+  }
+
+  if (isNonEmptyString(value)) {
+    const normalized = value.trim().toLowerCase();
+    if (['1', 'true', 'yes', 'y', 'да'].includes(normalized)) {
+      return true;
+    }
+
+    if (['0', 'false', 'no', 'n', 'нет'].includes(normalized)) {
+      return false;
+    }
+  }
+
+  return null;
+}
+
+function normalizeCallTypeToken(value) {
+  if (!isNonEmptyString(value)) {
+    return '';
+  }
+
+  const normalized = value.trim().toUpperCase();
+  if (['INCOMING', 'INBOUND', 'SINGLE_CHANNEL'].includes(normalized)) {
+    return 'INCOMING';
+  }
+
+  if (['OUTGOING', 'OUTBOUND'].includes(normalized)) {
+    return 'OUTGOING';
+  }
+
+  return '';
+}
+
+function normalizeTranscriptForBypass(value) {
+  if (!isNonEmptyString(value)) {
+    return '';
+  }
+
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-zа-яё0-9\s]+/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function tokenizeTranscriptWords(value) {
+  if (!value) {
+    return [];
+  }
+
+  return value.match(/[a-zа-яё0-9]+/gi) || [];
+}
+
+function hasBusinessSignal(words = []) {
+  return words.some((word) => BUSINESS_WORD_PREFIXES.some((prefix) => word.startsWith(prefix)));
+}
+
+function extractCallbackTimeHint(rawTranscript) {
+  const source = stringFromUnknown(rawTranscript);
+  if (!source) {
+    return '';
+  }
+
+  for (const pattern of CALLBACK_TIME_HINT_PATTERNS) {
+    const match = source.match(pattern);
+    if (match && isNonEmptyString(match[0])) {
+      return normalizeWhitespace(match[0]).toLowerCase();
+    }
+  }
+
+  return '';
+}
+
+function detectSendChannel({ rawTranscript, normalizedTranscript }) {
+  const source = `${stringFromUnknown(rawTranscript)} ${stringFromUnknown(normalizedTranscript)}`.toLowerCase();
+  if (!source) {
+    return '';
+  }
+
+  if (source.includes('whatsapp') || source.includes('ватсап') || source.includes('вацап')) {
+    return 'whatsapp';
+  }
+
+  if (source.includes('telegram') || source.includes('телеграм')) {
+    return 'telegram';
+  }
+
+  if (source.includes('почт') || source.includes('email') || source.includes('e-mail')) {
+    return 'email';
+  }
+
+  return '';
+}
+
+function normalizeDetailPhrase(value) {
+  return normalizeWhitespace(value)
+    .replace(/[.,;:!?]+$/g, '')
+    .trim();
+}
+
+function extractPriceDetail(rawTranscript) {
+  const source = stringFromUnknown(rawTranscript);
+  if (!source) {
+    return '';
+  }
+
+  const valueMatch = source.match(/(?:цена|стоимость)\s*(?:[:\-]?\s*)?([0-9][0-9\s]*(?:[.,][0-9]+)?\s*(?:тыс(?:яч)?|млн|руб(?:\.|лей|ля)?|₽)?)/i);
+  if (valueMatch && isNonEmptyString(valueMatch[1])) {
+    return normalizeDetailPhrase(valueMatch[1]).toLowerCase();
+  }
+
+  return '';
+}
+
+function extractTermDetail(rawTranscript) {
+  const source = stringFromUnknown(rawTranscript);
+  if (!source) {
+    return '';
+  }
+
+  const durationValuePattern = '([0-9][0-9\\s]*(?:[.,][0-9]+)?\\s*(?:минут(?:а|ы|у)?|час(?:а|ов)?|дн(?:я|ей)?|день|недел(?:я|и|ю|ь)|месяц(?:а|ев)?))';
+  const termWithShipment = source.match(new RegExp(`срок\\s+отгрузки\\s*(?:[:\\-]?\\s*)?${durationValuePattern}`, 'i'));
+  if (termWithShipment && isNonEmptyString(termWithShipment[1])) {
+    return `срок отгрузки ${normalizeDetailPhrase(termWithShipment[1]).toLowerCase()}`;
+  }
+
+  const plainTerm = source.match(new RegExp(`срок\\s*(?:[:\\-]?\\s*)?${durationValuePattern}`, 'i'));
+  if (plainTerm && isNonEmptyString(plainTerm[1])) {
+    return `срок ${normalizeDetailPhrase(plainTerm[1]).toLowerCase()}`;
+  }
+
+  const shipmentTerm = source.match(new RegExp(`отгрузк[аи]?\\s*(?:[:\\-]?\\s*)?${durationValuePattern}`, 'i'));
+  if (shipmentTerm && isNonEmptyString(shipmentTerm[1])) {
+    return `срок отгрузки ${normalizeDetailPhrase(shipmentTerm[1]).toLowerCase()}`;
+  }
+
+  if (/срок\s+отгрузки/i.test(source) || /отгрузк/i.test(source)) {
+    return 'срок отгрузки';
+  }
+
+  if (/срок/i.test(source)) {
+    return 'срок';
+  }
+
+  return '';
+}
+
+function buildPriceTermWhatDiscussed({ priceDetail, termDetail }) {
+  if (isNonEmptyString(priceDetail) && isNonEmptyString(termDetail)) {
+    return `Подтвердили цену ${priceDetail} и ${termDetail}.`;
+  }
+
+  if (isNonEmptyString(priceDetail)) {
+    return `Подтвердили цену ${priceDetail}.`;
+  }
+
+  if (isNonEmptyString(termDetail)) {
+    return `Подтвердили ${termDetail}.`;
+  }
+
+  return 'Коротко сверили цену и срок без подробного обсуждения.';
+}
+
+function formatSendChannelDestination(sendChannel) {
+  if (sendChannel === 'whatsapp') {
+    return 'в WhatsApp';
+  }
+
+  if (sendChannel === 'telegram') {
+    return 'в Telegram';
+  }
+
+  if (sendChannel === 'email') {
+    return 'на почту';
+  }
+
+  return '';
+}
+
+function detectShortIntent({ rawTranscript, normalizedTranscript }) {
+  const hasWrongNumberSignal = WRONG_NUMBER_PATTERNS.some((pattern) => pattern.test(normalizedTranscript));
+  if (hasWrongNumberSignal) {
+    return { type: 'wrong_number' };
+  }
+
+  const hasWeakAudioSignal = WEAK_AUDIO_PATTERNS.some((pattern) => pattern.test(normalizedTranscript));
+  if (hasWeakAudioSignal) {
+    return { type: 'bad_connection' };
+  }
+
+  const busyOrInconvenient = BUSY_OR_INCONVENIENT_PATTERNS.some((pattern) => pattern.test(normalizedTranscript));
+  if (busyOrInconvenient) {
+    return { type: 'busy_later' };
+  }
+
+  const callbackRequested = CALLBACK_OR_TRANSFER_PATTERNS.some((pattern) => pattern.test(normalizedTranscript));
+  if (callbackRequested) {
+    return {
+      type: 'callback_request',
+      callbackTimeHint: extractCallbackTimeHint(rawTranscript)
+    };
+  }
+
+  const hasPriceSignal = hasAnyToken(normalizedTranscript, PRICE_SIGNAL_TOKENS);
+  const hasTermSignal = hasAnyToken(normalizedTranscript, TERM_SIGNAL_TOKENS);
+  const hasSendInfoSignal = SEND_INFO_PATTERNS.some((pattern) => pattern.test(normalizedTranscript));
+  const sendChannel = detectSendChannel({ rawTranscript, normalizedTranscript });
+
+  if (hasPriceSignal && hasTermSignal) {
+    return {
+      type: 'price_term_confirmation',
+      priceDetail: extractPriceDetail(rawTranscript),
+      termDetail: extractTermDetail(rawTranscript),
+      sendInfoRequested: hasSendInfoSignal,
+      sendChannel
+    };
+  }
+
+  if (hasTermSignal) {
+    return {
+      type: 'term_confirmation',
+      termDetail: extractTermDetail(rawTranscript),
+      sendInfoRequested: hasSendInfoSignal,
+      sendChannel
+    };
+  }
+
+  if (hasSendInfoSignal) {
+    return {
+      type: 'send_info',
+      sendChannel
+    };
+  }
+
+  const discussLater = DISCUSS_LATER_PATTERNS.some((pattern) => pattern.test(normalizedTranscript));
+  if (discussLater) {
+    return { type: 'discuss_later' };
+  }
+
+  if (NO_SUBJECT_PATTERNS.some((pattern) => pattern.test(normalizedTranscript))) {
+    return { type: 'no_subject' };
+  }
+
+  return { type: 'generic_short' };
+}
+
+function buildAnalyzeBypassDecision(payload) {
+  const transcript = normalizeOptionalText(payload?.transcript, MAX_TEXT_LENGTH.transcriptPlain);
+  const normalizedTranscript = normalizeTranscriptForBypass(transcript);
+  const transcriptLengthMeta = normalizeOptionalInteger(payload?.transcriptLength);
+  const transcriptLength = Number.isInteger(transcriptLengthMeta)
+    ? transcriptLengthMeta
+    : normalizedTranscript.length;
+  const durationSec = normalizeOptionalInteger(payload?.durationSec);
+  const shortCallFlag = normalizeOptionalBoolean(payload?.shortCall);
+  const bypassHint = payload?.analyzeBypassHint && typeof payload.analyzeBypassHint === 'object'
+    ? payload.analyzeBypassHint
+    : null;
+  const shortIntent = detectShortIntent({
+    rawTranscript: transcript,
+    normalizedTranscript
+  });
+
+  if (bypassHint && isNonEmptyString(bypassHint.reason)) {
+    return {
+      shouldBypass: true,
+      reason: BYPASS_REASON.PRE_ANALYZE_HINT,
+      kind: shortIntent.type,
+      shortIntent,
+      hintReason: normalizeOptionalText(bypassHint.reason, 120),
+      transcriptLength,
+      durationSec
+    };
+  }
+
+  const words = tokenizeTranscriptWords(normalizedTranscript);
+  const meaningfulWords = words.filter((word) => word.length > 2);
+  const businessSignalDetected = hasBusinessSignal(words);
+  const callbackPhraseDetected = CALLBACK_OR_TRANSFER_PATTERNS.some((pattern) => pattern.test(normalizedTranscript));
+  const weakAudioSignalDetected = WEAK_AUDIO_PATTERNS.some((pattern) => pattern.test(normalizedTranscript));
+  const callbackLikelyTechnical = callbackPhraseDetected
+    && !businessSignalDetected
+    && (
+      transcriptLength <= 180
+      || (shortCallFlag === true && transcriptLength <= 220)
+      || (Number.isInteger(durationSec) && durationSec <= 35 && transcriptLength <= 260)
+      || meaningfulWords.length <= 5
+    );
+  const isTechnicalShortPhrase = weakAudioSignalDetected || callbackLikelyTechnical;
+
+  if (
+    isTechnicalShortPhrase
+    || (shortCallFlag === true && transcriptLength <= 220)
+    || (Number.isInteger(durationSec) && durationSec <= 35 && transcriptLength <= 260)
+    || transcriptLength <= 70
+    || (!businessSignalDetected && meaningfulWords.length <= 3 && transcriptLength <= 120)
+  ) {
+    return {
+      shouldBypass: true,
+      reason: isTechnicalShortPhrase ? BYPASS_REASON.SHORT_CALL_TECHNICAL : BYPASS_REASON.SHORT_OR_WEAK_TRANSCRIPT,
+      kind: shortIntent.type,
+      shortIntent,
+      hintReason: '',
+      transcriptLength,
+      durationSec
+    };
+  }
+
+  return {
+    shouldBypass: false,
+    reason: '',
+    kind: '',
+    shortIntent: null,
+    hintReason: '',
+    transcriptLength,
+    durationSec
+  };
+}
+
+function inferCategoryFromScenario(scenario) {
+  if (scenario === 'Запчасти') {
+    return 'запчасти';
+  }
+
+  if (scenario === 'Аренда') {
+    return 'аренда';
+  }
+
+  if (scenario === 'Заказ / производство') {
+    return 'продажа';
+  }
+
+  if (scenario === 'Ремонт' || scenario === 'Доставка') {
+    return 'сервис';
+  }
+
+  return 'прочее';
+}
+
+function buildBypassCoreReport({ shortIntent, transcriptLength, hintReason, normalizedTranscript }) {
+  const intentType = shortIntent?.type || 'generic_short';
+  let callEssence = 'Короткий контакт по рабочему вопросу.';
+  let whatDiscussed = 'Предметные детали в разговоре не успели обсудить.';
+  let outcome = 'Договоренности перенесли на следующий контакт.';
+  let nextStep = 'Ожидать следующий контакт.';
+  let importantNote = '';
+
+  if (intentType === 'callback_request') {
+    const callbackTimeHint = normalizeOptionalText(shortIntent?.callbackTimeHint, 64);
+    callEssence = callbackTimeHint
+      ? `Попросили перезвонить ${callbackTimeHint}.`
+      : 'Попросили перезвонить позже.';
+    whatDiscussed = 'Предметно вопрос не обсуждали.';
+    outcome = 'Разговор перенесли.';
+    nextStep = 'Созвониться в согласованное время.';
+  } else if (intentType === 'busy_later') {
+    callEssence = 'Собеседнику было неудобно говорить, попросили связаться позже.';
+    whatDiscussed = 'Основной вопрос отложили без деталей.';
+    outcome = 'Разговор перенесли на позже.';
+    nextStep = 'Повторить контакт позже.';
+  } else if (intentType === 'bad_connection') {
+    callEssence = 'Разговор прерывался из-за плохой связи.';
+    whatDiscussed = 'Содержательную часть разобрать не удалось.';
+    outcome = 'Договорились вернуться к разговору позже.';
+    nextStep = 'Повторить звонок при стабильной связи.';
+    importantNote = 'Плохо слышно, часть разговора неразборчива.';
+  } else if (intentType === 'wrong_number') {
+    callEssence = 'Сообщили, что ошиблись номером.';
+    whatDiscussed = 'Рабочий вопрос не обсуждали.';
+    outcome = 'Звонок завершили как ошибочный.';
+    nextStep = 'Дальнейшие действия не требуются.';
+  } else if (intentType === 'price_term_confirmation') {
+    const priceDetail = normalizeOptionalText(shortIntent?.priceDetail, 80).toLowerCase();
+    const termDetail = normalizeOptionalText(shortIntent?.termDetail, 90).toLowerCase();
+    const sendDestination = formatSendChannelDestination(shortIntent?.sendChannel);
+    callEssence = 'Коротко сверили цену и сроки.';
+    whatDiscussed = buildPriceTermWhatDiscussed({ priceDetail, termDetail });
+
+    if (shortIntent?.sendInfoRequested) {
+      outcome = sendDestination
+        ? `Попросили отправить подтверждение ${sendDestination}.`
+        : 'Попросили отправить подтверждение сообщением.';
+      nextStep = sendDestination
+        ? `Отправить подтверждение ${sendDestination}.`
+        : 'Отправить подтверждение цены и сроков сообщением.';
+    } else {
+      outcome = 'Ключевые условия подтвердили.';
+      nextStep = 'Уточнить детали на следующем созвоне.';
+    }
+  } else if (intentType === 'term_confirmation') {
+    const termDetail = normalizeOptionalText(shortIntent?.termDetail, 90).toLowerCase();
+    const sendDestination = formatSendChannelDestination(shortIntent?.sendChannel);
+    const isShipmentTerm = termDetail.includes('отгруз');
+    callEssence = isShipmentTerm ? 'Коротко уточнили срок отгрузки.' : 'Коротко уточнили сроки.';
+    whatDiscussed = isNonEmptyString(termDetail)
+      ? `Подтвердили ${termDetail}.`
+      : 'Коротко подтвердили срок без подробного обсуждения.';
+
+    if (shortIntent?.sendInfoRequested) {
+      outcome = sendDestination
+        ? `Попросили отправить подтверждение ${sendDestination}.`
+        : 'Попросили отправить подтверждение сообщением.';
+      nextStep = sendDestination
+        ? `Отправить подтверждение ${sendDestination}.`
+        : 'Отправить подтверждение сообщением.';
+    } else {
+      outcome = isShipmentTerm
+        ? 'Срок и условия отгрузки подтвердили.'
+        : 'Срок подтвердили в коротком контакте.';
+      nextStep = 'Вернуться к деталям в следующем контакте.';
+    }
+  } else if (intentType === 'send_info') {
+    const sendDestination = formatSendChannelDestination(shortIntent?.sendChannel);
+    callEssence = sendDestination
+      ? `Попросили отправить информацию ${sendDestination}.`
+      : 'Попросили отправить информацию сообщением.';
+    whatDiscussed = 'Предметный вопрос подробно не обсуждали.';
+    outcome = shortIntent?.sendChannel === 'email'
+      ? 'Ожидают письмо с деталями.'
+      : sendDestination
+        ? `Ожидают сообщение ${sendDestination}.`
+        : 'Ожидают сообщение с деталями.';
+    nextStep = sendDestination
+      ? `Отправить согласованную информацию ${sendDestination}.`
+      : 'Отправить согласованную информацию сообщением.';
+  } else if (intentType === 'discuss_later') {
+    callEssence = 'Подтвердили, что вопрос обсудят позже.';
+    whatDiscussed = 'Детали оставили на следующий разговор.';
+    outcome = 'Обсуждение перенесли.';
+    nextStep = 'Вернуться к вопросу в следующем контакте.';
+  } else if (intentType === 'no_subject') {
+    callEssence = 'Короткий технический контакт без предметного обсуждения.';
+    whatDiscussed = 'Предметно вопрос не обсуждали.';
+    outcome = 'Разговор завершили без фиксации деталей.';
+    nextStep = 'Дождаться следующего содержательного контакта.';
+  } else {
+    callEssence = 'Короткий технический перенос разговора.';
+    whatDiscussed = 'Предметно вопрос не обсуждали.';
+    outcome = 'Обсуждение перенесли на следующий контакт.';
+    nextStep = 'Вернуться к вопросу в следующем звонке.';
+  }
+
+  if (!importantNote && transcriptLength <= 40) {
+    importantNote = 'Разговор очень короткий, контекста мало.';
+  }
+
+  if (!importantNote && isNonEmptyString(hintReason)) {
+    importantNote = `Ограничение качества исходных данных: ${hintReason}.`;
+  }
+
+  if (!importantNote && normalizedTranscript && normalizedTranscript.length <= 24) {
+    importantNote = 'По записи мало текста для уверенного вывода.';
+  }
+
+  return {
+    callEssence: normalizeText(callEssence, MAX_TEXT_LENGTH.callEssence),
+    whatDiscussed: normalizeText(whatDiscussed, MAX_TEXT_LENGTH.whatDiscussed),
+    outcome: normalizeText(outcome, MAX_TEXT_LENGTH.outcome),
+    nextStep: normalizeText(nextStep, MAX_TEXT_LENGTH.nextStep),
+    importantNote: normalizeOptionalText(importantNote, MAX_TEXT_LENGTH.importantNote)
+  };
+}
+
+function buildBypassAnalysis(payload, bypassDecision) {
+  const normalizedTranscript = normalizeTranscriptForBypass(payload?.transcript || '');
+  const scenario = normalizePrimaryScenario(
+    payload?.scenario,
+    'прочее',
+    normalizedTranscript
+  );
+  const category = inferCategoryFromScenario(scenario);
+  const report = buildBypassCoreReport({
+    shortIntent: bypassDecision.shortIntent,
+    transcriptLength: bypassDecision.transcriptLength,
+    hintReason: bypassDecision.hintReason,
+    normalizedTranscript
+  });
+
+  const wantedLines = [
+    report.callEssence,
+    report.whatDiscussed,
+    report.outcome
+  ].filter(Boolean);
+
+  const normalized = {
+    category,
+    scenario,
+    primaryScenario: scenario,
+    topic: normalizeText(report.callEssence, MAX_TEXT_LENGTH.topic) || 'Короткий технический контакт',
+    callEssence: report.callEssence,
+    whatDiscussed: report.whatDiscussed,
+    outcome: report.outcome,
+    summary: report.callEssence,
+    result: report.whatDiscussed,
+    nextStep: report.nextStep,
+    priority: 'low',
+    tags: ['звонок', 'короткий-контакт'],
+    confidence: 0.34,
+    wantedSummary: clampMultilineText(wantedLines.join('\n'), MAX_TEXT_LENGTH.wantedSummary),
+    participantsAssumption: 'Предположение: два участника разговора (клиент и сотрудник).',
+    analysisPath: 'bypass',
+    bypassReason: bypassDecision.reason
+  };
+
+  if (report.importantNote) {
+    normalized.importantNote = report.importantNote;
+    normalized.analysisWarnings = [report.importantNote];
+  }
+
+  return normalized;
 }
 
 function buildAiUsageEvent({
@@ -650,25 +1238,44 @@ function normalizeUniqueItems(rawValues, { maxLength, maxItems }) {
   return normalizedItems;
 }
 
+function hasAnyToken(text, tokens = []) {
+  return tokens.some((token) => text.includes(token));
+}
+
 function inferPrimaryScenarioFromText(text) {
   if (!text) {
     return '';
   }
 
-  if (text.includes('запчаст') || text.includes('подшип') || text.includes('ролик')) {
-    return 'Запчасти';
-  }
+  const hasPriceSignal = hasAnyToken(text, PRICE_SIGNAL_TOKENS);
+  const hasTermSignal = hasAnyToken(text, TERM_SIGNAL_TOKENS);
+  const hasOrderProductionSignal = hasAnyToken(text, ORDER_PRODUCTION_SIGNAL_TOKENS);
+  const hasStrongOrderSignal = text.includes('парт') || text.includes('производств') || text.includes('запуск');
+  const hasDeliverySignal = hasAnyToken(text, DELIVERY_SIGNAL_TOKENS);
+  const hasPartsSignal = text.includes('запчаст') || text.includes('подшип') || text.includes('ролик');
 
   if (text.includes('аренд') || text.includes('прокат')) {
     return 'Аренда';
   }
 
-  if (text.includes('доставк') || text.includes('логист') || text.includes('самовывоз') || text.includes('отгруз')) {
-    return 'Доставка';
-  }
-
   if (text.includes('ремонт') || text.includes('сервис') || text.includes('неисправ') || text.includes('диагност')) {
     return 'Ремонт';
+  }
+
+  if (hasStrongOrderSignal || (hasOrderProductionSignal && hasPriceSignal && hasTermSignal)) {
+    return 'Заказ / производство';
+  }
+
+  if (hasPartsSignal && !hasStrongOrderSignal) {
+    return 'Запчасти';
+  }
+
+  if (hasOrderProductionSignal || (hasPriceSignal && hasTermSignal)) {
+    return 'Заказ / производство';
+  }
+
+  if (hasDeliverySignal) {
+    return 'Доставка';
   }
 
   return '';
@@ -676,10 +1283,12 @@ function inferPrimaryScenarioFromText(text) {
 
 function normalizePrimaryScenario(rawPrimaryScenario, category, contextText) {
   if (isNonEmptyString(rawPrimaryScenario)) {
-    const token = normalizeWhitespace(rawPrimaryScenario).toLowerCase().replace(/[\s-]+/g, '_');
+    const token = normalizeWhitespace(rawPrimaryScenario).toLowerCase().replace(/[\s\/-]+/g, '_');
     const aliasValue = PRIMARY_SCENARIO_ALIASES[token];
     if (aliasValue) {
-      return aliasValue;
+      if (aliasValue !== 'Другое') {
+        return aliasValue;
+      }
     }
   }
 
@@ -881,17 +1490,35 @@ function normalizeAndValidateAnalysis(raw, options = {}) {
   }
 
   const normalizedCategory = normalizeEnum(raw.category, ANALYSIS_CATEGORIES, 'прочее');
-  const normalizedTopic = normalizeText(raw.topic, MAX_TEXT_LENGTH.topic) || 'Общий запрос клиента';
-  const normalizedSummary = normalizeText(raw.summary, MAX_TEXT_LENGTH.summary) || 'Запрос клиента зафиксирован.';
-  const normalizedOutcome = normalizeText(raw.outcome, MAX_TEXT_LENGTH.outcome) || 'Требуется уточнение деталей.';
-  const normalizedNextStep = normalizeText(raw.nextStep, MAX_TEXT_LENGTH.nextStep) || 'Связаться с клиентом для уточнения деталей.';
+  const normalizedCallEssence = normalizeText(
+    raw.callEssence || raw.shortSummary || raw.summary,
+    MAX_TEXT_LENGTH.callEssence
+  ) || 'Короткий контакт по рабочему вопросу.';
+  const normalizedWhatDiscussed = normalizeText(
+    raw.whatDiscussed || raw.result || raw.issueReason || raw.summary,
+    MAX_TEXT_LENGTH.whatDiscussed
+  ) || 'Предметные детали в разговоре не зафиксированы.';
+  const normalizedOutcome = normalizeText(
+    raw.outcome || raw.result || raw.summary,
+    MAX_TEXT_LENGTH.outcome
+  ) || 'Итоговые договоренности в разговоре не зафиксированы.';
+  const normalizedImportantNote = normalizeOptionalText(raw.importantNote, MAX_TEXT_LENGTH.importantNote);
+  const normalizedTopic = normalizeText(raw.topic, MAX_TEXT_LENGTH.topic)
+    || normalizeText(normalizedCallEssence, MAX_TEXT_LENGTH.topic)
+    || 'Короткий отчет по звонку';
+  const normalizedSummary = normalizeText(raw.summary, MAX_TEXT_LENGTH.summary) || normalizedCallEssence;
+  const normalizedResult = normalizeText(raw.result, MAX_TEXT_LENGTH.result) || normalizedWhatDiscussed;
+  const normalizedNextStep = normalizeText(raw.nextStep, MAX_TEXT_LENGTH.nextStep) || 'Уточнить дальнейшие действия после следующего контакта.';
   const normalizedPriority = normalizeEnum(raw.priority, ANALYSIS_PRIORITIES, 'low');
   const normalizedTags = normalizeTags(raw.tags);
   const contextText = [
     normalizedTopic,
+    normalizedCallEssence,
+    normalizedWhatDiscussed,
     normalizedSummary,
     normalizedOutcome,
     normalizedNextStep,
+    normalizeText(raw.scenario, 32),
     normalizeText(raw.wantedSummary, MAX_TEXT_LENGTH.wantedSummary),
     normalizeText(raw.primaryScenario, 32),
     normalizeText(raw.deliveryDetails, MAX_TEXT_LENGTH.deliveryDetails)
@@ -907,18 +1534,30 @@ function normalizeAndValidateAnalysis(raw, options = {}) {
 
   const normalized = {
     category: normalizedCategory,
+    scenario: normalizePrimaryScenario(raw.scenario || raw.primaryScenario, normalizedCategory, contextText),
+    primaryScenario: normalizePrimaryScenario(raw.scenario || raw.primaryScenario, normalizedCategory, contextText),
     topic: normalizedTopic,
+    callEssence: normalizedCallEssence,
+    whatDiscussed: normalizedWhatDiscussed,
     summary: normalizedSummary,
     outcome: normalizedOutcome,
+    result: normalizedResult,
     nextStep: normalizedNextStep,
     priority: normalizedPriority,
     tags: normalizedTags,
-    primaryScenario: normalizePrimaryScenario(raw.primaryScenario, normalizedCategory, contextText),
     wantedSummary: normalizeWantedSummary(raw.wantedSummary, [
+      normalizedCallEssence,
+      normalizedWhatDiscussed,
       normalizedSummary,
-      normalizedOutcome
-    ])
+      normalizedOutcome,
+      normalizedResult
+    ]),
+    confidence: normalizeOptionalConfidence(raw.confidence) ?? 0.6
   };
+
+  if (normalizedImportantNote) {
+    normalized.importantNote = normalizedImportantNote;
+  }
 
   if (partsRequested.length > 0) {
     normalized.partsRequested = partsRequested;
@@ -1040,8 +1679,29 @@ function normalizeAndValidateAnalysis(raw, options = {}) {
     normalized.analysisWarnings = analysisWarnings;
   }
 
+  if (normalizedImportantNote) {
+    const existingWarnings = Array.isArray(normalized.analysisWarnings) ? normalized.analysisWarnings : [];
+    const hasImportantWarning = existingWarnings.some(
+      (warning) => normalizeOptionalText(warning, MAX_TEXT_LENGTH.analysisWarningItem).toLowerCase()
+        === normalizedImportantNote.toLowerCase()
+    );
+    if (!hasImportantWarning) {
+      normalized.analysisWarnings = [...existingWarnings, normalizedImportantNote].slice(0, 8);
+    }
+  }
+
   if (normalized.tags.length === 0) {
     normalized.tags = ['звонок'];
+  }
+
+  const analysisPath = normalizeOptionalText(raw.analysisPath, 24).toLowerCase();
+  if (analysisPath) {
+    normalized.analysisPath = analysisPath;
+  }
+
+  const bypassReason = normalizeOptionalText(raw.bypassReason, 120);
+  if (bypassReason) {
+    normalized.bypassReason = bypassReason;
   }
 
   return normalized;
@@ -1091,6 +1751,28 @@ function normalizeTranscriptionText(raw) {
   }
 
   return raw.replace(/\s+/g, ' ').trim();
+}
+
+function buildEmptyTranscriptionDetails(response) {
+  const responseKind = Array.isArray(response)
+    ? 'array'
+    : (response === null ? 'null' : typeof response);
+  const rawText = typeof response === 'string'
+    ? response
+    : (isNonEmptyString(response?.text) ? response.text : '');
+  const language = isNonEmptyString(response?.language) ? response.language.trim() : '';
+  const durationSeconds = Number.isFinite(response?.duration)
+    ? Number(response.duration.toFixed(3))
+    : null;
+  const segmentCount = Array.isArray(response?.segments) ? response.segments.length : null;
+
+  return {
+    responseKind,
+    textLength: typeof rawText === 'string' ? rawText.length : 0,
+    language,
+    durationSeconds,
+    segmentCount
+  };
 }
 
 function decodeAudioBase64(rawAudioBase64) {
@@ -1225,11 +1907,58 @@ function buildEmployeeHint(payload) {
   const employeeTitle = normalizeOptionalText(employee.employeeTitle, 120);
   const phoneNormalized = normalizeOptionalText(employee.phoneNormalized, 40);
 
-  if (!employeeName || !employeeTitle || !phoneNormalized) {
+  if (!employeeName && !employeeTitle && !phoneNormalized) {
     return 'none';
   }
 
-  return `${employeeName}, ${employeeTitle}, ${phoneNormalized}`;
+  return [
+    employeeName,
+    employeeTitle,
+    phoneNormalized
+  ].filter(Boolean).join(', ');
+}
+
+function buildCallDirectionContext(payload) {
+  const explicit = normalizeOptionalText(payload?.callDirectionContext, 64);
+  if (explicit) {
+    return explicit;
+  }
+
+  const callType = normalizeCallTypeToken(payload?.callType);
+  if (callType === 'OUTGOING') {
+    return 'outgoing_employee_to_client';
+  }
+
+  if (callType === 'INCOMING') {
+    return 'incoming_client_to_employee';
+  }
+
+  return 'unknown_direction';
+}
+
+function buildWhoCalledWhom(payload) {
+  const explicit = normalizeOptionalText(payload?.whoCalledWhom, 120);
+  if (explicit) {
+    return explicit;
+  }
+
+  const employeePhone = normalizeOptionalText(payload?.employeePhone, 40);
+  const clientPhone = normalizeOptionalText(payload?.clientPhone, 40);
+  const callType = normalizeCallTypeToken(payload?.callType);
+
+  if (!employeePhone || !clientPhone) {
+    return 'unknown';
+  }
+
+  if (callType === 'OUTGOING') {
+    return `${employeePhone} -> ${clientPhone}`;
+  }
+
+  if (callType === 'INCOMING') {
+    return `${clientPhone} -> ${employeePhone}`;
+  }
+
+  return 'unknown';
 }
 
 function buildUserPrompt(payload) {
@@ -1237,15 +1966,35 @@ function buildUserPrompt(payload) {
   const callerNumber = normalizeOptionalText(payload.callerNumber, 40) || 'unknown';
   const calleeNumber = normalizeOptionalText(payload.calleeNumber, 40) || 'unknown';
   const destinationNumber = normalizeOptionalText(payload.destinationNumber, 40) || 'unknown';
+  const employeePhone = normalizeOptionalText(payload.employeePhone, 40) || 'unknown';
+  const clientPhone = normalizeOptionalText(payload.clientPhone, 40) || 'unknown';
+  const durationSec = normalizeOptionalInteger(payload.durationSec);
+  const transcriptLength = normalizeOptionalInteger(payload.transcriptLength) ?? getTranscriptChars(payload?.transcript);
+  const answeredValue = normalizeOptionalBoolean(payload.answered);
+  const noAnswerValue = normalizeOptionalBoolean(payload.noAnswer);
+  const resolvedAnswered = answeredValue !== null
+    ? answeredValue
+    : (noAnswerValue !== null ? !noAnswerValue : null);
+  const shortCall = normalizeOptionalBoolean(payload.shortCall);
 
   const lines = [
-    'Сформируй структурированный анализ по транскрипту звонка.',
+    'Сформируй компактный report-style анализ по транскрипту звонка.',
+    'Не придумывай детали и не формулируй ответ как список задач/действий.',
+    'Если фактов мало, явно отрази ограниченность данных.',
     `phone: ${isNonEmptyString(payload.phone) ? payload.phone.trim() : 'unknown'}`,
     `callDateTime: ${isNonEmptyString(payload.callDateTime) ? payload.callDateTime.trim() : 'unknown'}`,
     `callType: ${callType}`,
     `callerNumber: ${callerNumber}`,
     `calleeNumber: ${calleeNumber}`,
     `destinationNumber: ${destinationNumber}`,
+    `durationSec: ${Number.isInteger(durationSec) ? durationSec : 'unknown'}`,
+    `answered: ${resolvedAnswered === null ? 'unknown' : (resolvedAnswered ? 'yes' : 'no')}`,
+    `employeePhone: ${employeePhone}`,
+    `clientPhone: ${clientPhone}`,
+    `transcriptLength: ${Number.isInteger(transcriptLength) ? transcriptLength : 'unknown'}`,
+    `shortCall: ${shortCall === null ? 'unknown' : (shortCall ? 'true' : 'false')}`,
+    `callDirectionContext: ${buildCallDirectionContext(payload)}`,
+    `whoCalledWhom: ${buildWhoCalledWhom(payload)}`,
     `employeeHint: ${buildEmployeeHint(payload)}`,
     'transcript:',
     payload.transcript
@@ -1295,6 +2044,46 @@ function createOpenAIAnalyzer(config, logger) {
     const effectiveAnalyzeModel = resolveAnalyzeModel(payload);
     const transcriptCharsRaw = getTranscriptChars(payload?.transcript);
     const transcriptCharsSent = transcriptCharsRaw;
+    const bypassDecision = buildAnalyzeBypassDecision(payload);
+
+    if (bypassDecision.shouldBypass) {
+      const bypassAnalysis = normalizeAndValidateAnalysis(
+        buildBypassAnalysis(payload, bypassDecision),
+        { transcript: payload.transcript }
+      );
+      const durationMs = Date.now() - startedAt;
+      const aiUsage = buildAiUsageEvent({
+        payload,
+        operation: 'analyze',
+        model: 'deterministic-bypass',
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+        transcriptCharsRaw,
+        transcriptCharsSent: 0,
+        durationMs,
+        responseStatus: 'skipped',
+        skipReason: bypassDecision.reason,
+        estimatedCostRub: 0
+      });
+
+      logger.info('ai_usage_analyze', aiUsage);
+      logger.info('polza_analysis_bypass', {
+        requestId: payload?.requestId || '',
+        callEventId: normalizeCallEventId(payload?.callEventId),
+        callId: isNonEmptyString(payload?.callId) ? payload.callId.trim().slice(0, 256) : '',
+        reason: bypassDecision.reason,
+        kind: bypassDecision.kind,
+        transcriptLength: bypassDecision.transcriptLength,
+        durationSec: bypassDecision.durationSec
+      });
+
+      return {
+        ...bypassAnalysis,
+        aiUsage
+      };
+    }
+
     let completion;
 
     try {
@@ -1571,11 +2360,13 @@ function createOpenAITranscriber(config, logger) {
         audioBytes: audioBuffer.length
       });
 
-      throw attachAiUsage(new OpenAIClientError(
+      const emptyError = attachAiUsage(new OpenAIClientError(
         'Polza returned empty transcription',
         502,
         'POLZA_EMPTY_TRANSCRIPTION'
       ), aiUsage);
+      emptyError.details = buildEmptyTranscriptionDetails(response);
+      throw emptyError;
     }
 
     const aiUsage = buildAiUsageEvent({

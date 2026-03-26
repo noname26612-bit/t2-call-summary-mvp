@@ -69,6 +69,76 @@ function extractStringField(raw, fallbackPath, configuredPath) {
   };
 }
 
+function extractOptionalField(raw, fallbackPath, configuredPath) {
+  const fallbackPaths = Array.isArray(fallbackPath) ? fallbackPath : [fallbackPath];
+  const candidatePaths = uniquePaths([configuredPath, ...fallbackPaths]);
+
+  for (const path of candidatePaths) {
+    const extracted = getValueByPath(raw, path);
+    if (extracted !== undefined && extracted !== null && extracted !== '') {
+      return {
+        value: extracted,
+        resolvedPath: path
+      };
+    }
+  }
+
+  return {
+    value: null,
+    resolvedPath: '',
+    attemptedPaths: candidatePaths
+  };
+}
+
+function normalizeDurationSec(value) {
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+    return Math.round(value);
+  }
+
+  if (!isNonEmptyString(value)) {
+    return null;
+  }
+
+  const normalized = value.trim().replace(',', '.');
+  if (/^[0-9]+(?:\.[0-9]+)?$/.test(normalized)) {
+    const parsed = Number.parseFloat(normalized);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return Math.round(parsed);
+    }
+  }
+
+  return null;
+}
+
+function normalizeBoolean(value) {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  if (typeof value === 'number') {
+    if (value === 1) {
+      return true;
+    }
+
+    if (value === 0) {
+      return false;
+    }
+  }
+
+  if (isNonEmptyString(value)) {
+    const normalized = value.trim().toLowerCase();
+    if (['1', 'true', 'yes', 'y', 'да'].includes(normalized)) {
+      return true;
+    }
+
+    if (['0', 'false', 'no', 'n', 'нет'].includes(normalized)) {
+      return false;
+    }
+  }
+
+  return null;
+}
+
 function buildMissingFieldError({ field, configuredPath, attemptedPaths }) {
   const configured = isNonEmptyString(configuredPath)
     ? `configured path "${configuredPath}"`
@@ -115,6 +185,15 @@ function normalizeIncomingCallPayload(raw, adapterConfig = {}) {
     destinationNumber: isNonEmptyString(adapterConfig.destinationNumberFieldPath)
       ? adapterConfig.destinationNumberFieldPath.trim()
       : '',
+    durationSec: isNonEmptyString(adapterConfig.durationSecFieldPath)
+      ? adapterConfig.durationSecFieldPath.trim()
+      : '',
+    answered: isNonEmptyString(adapterConfig.answeredFieldPath)
+      ? adapterConfig.answeredFieldPath.trim()
+      : '',
+    noAnswer: isNonEmptyString(adapterConfig.noAnswerFieldPath)
+      ? adapterConfig.noAnswerFieldPath.trim()
+      : '',
     callId: isNonEmptyString(adapterConfig.callIdFieldPath)
       ? adapterConfig.callIdFieldPath.trim()
       : ''
@@ -127,6 +206,21 @@ function normalizeIncomingCallPayload(raw, adapterConfig = {}) {
   const callerNumberField = extractStringField(raw, 'callerNumber', configuredPaths.callerNumber);
   const calleeNumberField = extractStringField(raw, 'calleeNumber', configuredPaths.calleeNumber);
   const destinationNumberField = extractStringField(raw, 'destinationNumber', configuredPaths.destinationNumber);
+  const durationSecField = extractOptionalField(
+    raw,
+    ['durationSec', 'durationSeconds', 'conversationDurationSec', 'conversationDurationSeconds', 'conversationDuration'],
+    configuredPaths.durationSec
+  );
+  const answeredField = extractOptionalField(
+    raw,
+    ['answered', 'isAnswered', 'is_answered'],
+    configuredPaths.answered
+  );
+  const noAnswerField = extractOptionalField(
+    raw,
+    ['noAnswer', 'no_answer', 'missed', 'isMissed', 'is_missed'],
+    configuredPaths.noAnswer
+  );
   const callIdField = extractStringField(
     raw,
     ['callId', 'externalCallId', 'recordFileName', 'recordingId'],
@@ -168,6 +262,9 @@ function normalizeIncomingCallPayload(raw, adapterConfig = {}) {
       callerNumber: callerNumberField.resolvedPath || '',
       calleeNumber: calleeNumberField.resolvedPath || '',
       destinationNumber: destinationNumberField.resolvedPath || '',
+      durationSec: durationSecField.resolvedPath || '',
+      answered: answeredField.resolvedPath || '',
+      noAnswer: noAnswerField.resolvedPath || '',
       callId: callIdField.resolvedPath || ''
     },
     topLevelKeys: Object.keys(raw).sort()
@@ -181,6 +278,10 @@ function normalizeIncomingCallPayload(raw, adapterConfig = {}) {
     };
   }
 
+  const normalizedDurationSec = normalizeDurationSec(durationSecField.value);
+  const normalizedAnswered = normalizeBoolean(answeredField.value);
+  const normalizedNoAnswer = normalizeBoolean(noAnswerField.value);
+
   return {
     isValid: true,
     payload: {
@@ -191,6 +292,9 @@ function normalizeIncomingCallPayload(raw, adapterConfig = {}) {
       ...(isNonEmptyString(callerNumberField.value) ? { callerNumber: callerNumberField.value } : {}),
       ...(isNonEmptyString(calleeNumberField.value) ? { calleeNumber: calleeNumberField.value } : {}),
       ...(isNonEmptyString(destinationNumberField.value) ? { destinationNumber: destinationNumberField.value } : {}),
+      ...(Number.isInteger(normalizedDurationSec) ? { durationSec: normalizedDurationSec } : {}),
+      ...(normalizedAnswered !== null ? { answered: normalizedAnswered } : {}),
+      ...(normalizedNoAnswer !== null ? { noAnswer: normalizedNoAnswer } : {}),
       ...(isNonEmptyString(callIdField.value) ? { callId: callIdField.value } : {})
     },
     adapterMeta

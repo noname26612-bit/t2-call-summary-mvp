@@ -11,6 +11,8 @@ Node.js/Express сервис для обработки телефонных зв
 
 - приём и валидация call event
 - анализ транскрипта через `ai-gateway`
+- report-style summary contract для Telegram (`Суть звонка / Что обсуждали / Чем закончилось / Важно? / Сценарий`)
+- deterministic bypass для коротких/слабых звонков (без полного AI-анализа)
 - реконструкция диалога по plain transcript (без отдельного audio diarization provider)
 - confidence-aware summary (осторожный стиль при низкой уверенности в ролях)
 - employee phone directory (lookup сотрудника по внутреннему номеру, active-only)
@@ -35,11 +37,12 @@ Node.js/Express сервис для обработки телефонных зв
 - ai-gateway / provider routing stabilization - завершён
 - Polza cutover - завершён
 - Tele2 poller production hardening - завершён
-- Telegram message format v2 - в работе (post-baseline improvement)
+- Telegram report-style summary rollout (`2026-03-25`) - завершён
 
 ## Текущий статус
 
 - core production flow стабилен
+- report-style Telegram summary и bypass-path для low-signal звонков выкачены в production
 - дальнейшие изменения идут как точечные post-baseline улучшения
 
 ## Repo guide / документы
@@ -73,6 +76,13 @@ npm run dev
 - `npm run audit:call-meta -- --hours 24 --source tele2_poll_once`
 - `npm run audit:ai-usage -- --hours 24 --source tele2_poll_once`
 - `npm run admin:employee-directory -- lookup --phone "+79991234567"`
+
+Ops hardening утилиты:
+
+- day-level funnel report: `npm run ops:daily-funnel -- --date 2026-03-26`
+- strict anomaly guardrail (non-zero exit): `npm run ops:daily-funnel:strict -- --date 2026-03-26`
+- replay recoverable cases (`T2_FILE_HTTP_ERROR`, `POLZA_EMPTY_TRANSCRIPTION`, `AI_GATEWAY_EMPTY_TRANSCRIPT`): `npm run ops:replay-recoverable -- --date 2026-03-26 --limit 20`
+- dry-run replay candidates: `npm run ops:replay-recoverable -- --date 2026-03-26 --dry-run`
 
 ## Production DB ops (self-hosted PostgreSQL)
 

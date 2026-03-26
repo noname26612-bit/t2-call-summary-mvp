@@ -2,6 +2,66 @@
 
 Operational progress log for post-baseline work after the successful Polza production cutover.
 
+## Completed production rollout (`2026-03-25`): report-style summary pipeline + narrow runtime deploy
+
+Scope (narrow, production-safe):
+
+- keep existing topology unchanged (`main app` + `ai-gateway` + `t2-postgres` on same VM/network)
+- keep Tele2 token flow unchanged
+- keep existing pre-transcribe skip rules unchanged (`outgoing_unanswered`, `<=10s`) in poller runtime
+- migrate Telegram summary output to compact report-style fields
+- pass extra runtime call context into `/analyze` payload
+- replace low-signal pre-analyze hard skip with deterministic bypass summary path
+
+Executed on production VM:
+
+- access path: `artem266@93.77.179.73`
+- pre-rollout backups created:
+  - runtime file/env backup dir: `/tmp/pre-report-summary-rollout-20260325T113606Z`
+  - backed up env files: `/opt/t2-call-summary/main.env`, `/opt/t2-call-summary/gateway.env`
+  - captured previous image refs for rollback
+- deployed runtime images:
+  - `t2-call-summary:local-report-summary-20260325T113643Z`
+  - `ai-gateway:local-report-summary-20260325T113643Z`
+- restarted only required containers:
+  - `t2-call-summary`
+  - `ai-gateway`
+  - (`t2-postgres` not restarted/rebuilt)
+
+Post-deploy health evidence:
+
+- `docker ps` on VM:
+  - `t2-call-summary` -> `healthy`
+  - `ai-gateway` -> `healthy`
+  - `t2-postgres` -> `healthy`
+- endpoint checks:
+  - `GET http://127.0.0.1:3000/healthz` -> `{"status":"ok","database":"ok","timezone":"Europe/Moscow"}`
+  - `GET http://127.0.0.1:3001/healthz` -> `{"status":"ok"}`
+
+Post-deploy smoke evidence:
+
+1. main app -> ai-gateway -> Polza -> Telegram path:
+   - `POST /api/process-call` (`2026-03-25T11:40:47Z`) -> `status=processed`, `telegram.status=sent`
+   - DB evidence (`call_events.id=414`):
+     - `status=processed`, `telegram_status=sent`
+     - latest `telegram_deliveries.status=sent`
+   - `ai_usage_audit` for `call_event_id=414`:
+     - `operation=analyze`, `provider=polza`, `model=gpt-5-mini`, `response_status=success`
+
+2. deterministic bypass path on gateway:
+   - direct `POST /analyze` with low-signal hint -> `analysisPath=bypass`
+   - `aiUsage.model=deterministic-bypass`, `responseStatus=skipped`, `totalTokens=0`
+
+3. local safety regression checks after rollout branch changes:
+   - passed:
+     - `npm run -s smoke:telegram-v2`
+     - `npm run -s smoke:telegram-routing`
+     - `npm run -s smoke:transcript-button`
+     - `npm run -s smoke:tele2-poll-runtime-path`
+     - `npm run -s smoke:telegram-callback-polling`
+     - `npm run -s smoke:dialog-reconstruction`
+     - `npm run -s smoke:employee-directory`
+
 ## Completed production rollout (`2026-03-23`): cost-guards micro-pass + runtime redeploy
 
 Scope (narrow, no topology change):

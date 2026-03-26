@@ -1,3 +1,4 @@
+const crypto = require('node:crypto');
 const { formatTelegramCallSummary } = require('./telegramMessageFormatter');
 const { normalizePhone } = require('../utils/ignoredPhones');
 const { resolveEmployeePhoneFromCallMeta } = require('../utils/callParticipants');
@@ -179,6 +180,26 @@ function buildTranscriptCallbackData(callEventId) {
   }
 
   return `${TRANSCRIPT_CALLBACK_PREFIX}${normalizedCallEventId}`;
+}
+
+function buildFormattedMessageDebugPayload(text) {
+  const normalized = isNonEmptyString(text) ? text.trim() : '';
+  if (!normalized) {
+    return {
+      formattedMessageLength: 0,
+      formattedMessageHashSha256: null,
+      formattedMessagePreview: null
+    };
+  }
+
+  const previewLimit = 1200;
+  return {
+    formattedMessageLength: normalized.length,
+    formattedMessageHashSha256: crypto.createHash('sha256').update(normalized).digest('hex'),
+    formattedMessagePreview: normalized.length <= previewLimit
+      ? normalized
+      : `${normalized.slice(0, previewLimit).trimEnd()}…`
+  };
 }
 
 function createTelegramSender(config, logger) {
@@ -444,6 +465,7 @@ function createTelegramSender(config, logger) {
       destinationNumber,
       timeZone
     });
+    const formattedMessageDebug = buildFormattedMessageDebugPayload(text);
 
     const callbackData = buildTranscriptCallbackData(callEventId);
     const replyMarkup = callbackData
@@ -484,7 +506,8 @@ function createTelegramSender(config, logger) {
           routePhone: routingEmployeePhone || null,
           recipients: [],
           sentCount: 0,
-          failedCount: 0
+          failedCount: 0,
+          ...formattedMessageDebug
         },
         recipientResults: []
       };
@@ -550,7 +573,8 @@ function createTelegramSender(config, logger) {
         routePhone: routingEmployeePhone || null,
         recipients: recipientResults,
         sentCount,
-        failedCount
+        failedCount,
+        ...formattedMessageDebug
       },
       recipientResults
     };

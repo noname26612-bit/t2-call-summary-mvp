@@ -154,24 +154,28 @@ function parseArgs(argv) {
 function scoreSummaryPair({ oldMessage, newMessage, analysis }) {
   const oldText = String(oldMessage || '');
   const newText = String(newMessage || '');
-  const oldFeatures = [
-    'Суть запроса:',
-    'Ответ сотрудника:',
-    'Итог:',
-    'Дальше:',
-    'Прозвучал ответ:',
-    'По разговору запрос:'
-  ].filter((token) => oldText.includes(token)).length;
-  const newFeatures = [
-    'Суть запроса:',
-    'Ответ сотрудника:',
-    'Итог:',
-    'Дальше:',
-    'Прозвучал ответ:',
-    'По разговору запрос:'
-  ].filter((token) => newText.includes(token)).length;
+  const reportStyleTokens = [
+    'Суть звонка:',
+    'Что обсуждали:',
+    'Чем закончилось:',
+    'Сценарий:',
+    'Сотрудник:',
+    'Тип звонка:'
+  ];
+  const deprecatedTokens = [
+    'По разговору запрос:',
+    'Неопределенность:',
+    'Итог по фактам:',
+    'Основная тема:',
+    'Категория:'
+  ];
+
+  const oldFeatures = reportStyleTokens.filter((token) => oldText.includes(token)).length
+    - deprecatedTokens.filter((token) => oldText.includes(token)).length;
+  const newFeatures = reportStyleTokens.filter((token) => newText.includes(token)).length
+    - deprecatedTokens.filter((token) => newText.includes(token)).length;
   const lowConfidence = typeof analysis?.speakerRoleConfidence === 'number' && analysis.speakerRoleConfidence < 0.55;
-  const cautiousInLowConfidence = !lowConfidence || !newText.includes('Итог по фактам: Клиент:');
+  const cautiousInLowConfidence = !lowConfidence || !newText.includes('Клиент:');
 
   let verdict = 'same';
   if (newFeatures > oldFeatures) {

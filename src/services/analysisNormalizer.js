@@ -8,14 +8,26 @@ const ANALYSIS_CATEGORIES = Object.freeze([
 ]);
 
 const ANALYSIS_URGENCY = Object.freeze(['низкая', 'средняя', 'высокая']);
-const PRIMARY_SCENARIOS = Object.freeze(['Запчасти', 'Аренда', 'Ремонт', 'Доставка', 'Другое']);
+const PRIMARY_SCENARIOS = Object.freeze([
+  'Запчасти',
+  'Аренда',
+  'Ремонт',
+  'Заказ / производство',
+  'Доставка',
+  'Другое'
+]);
 const REPAIR_TYPES = Object.freeze(['капитальный', 'выездной']);
 
 const TEXT_LIMITS = Object.freeze({
   topic: 80,
+  callEssence: 220,
+  whatDiscussed: 280,
   summary: 220,
-  result: 160,
+  result: 280,
   nextStep: 160,
+  importantNote: 180,
+  analysisPath: 24,
+  bypassReason: 120,
   transcriptPlain: 20000,
   participantsAssumption: 120,
   detectedClientSpeaker: 80,
@@ -53,6 +65,12 @@ const REQUIRED_FIELDS = Object.freeze([
 ]);
 
 const OPTIONAL_FIELDS = Object.freeze([
+  'scenario',
+  'callEssence',
+  'whatDiscussed',
+  'importantNote',
+  'analysisPath',
+  'bypassReason',
   'primaryScenario',
   'wantedSummary',
   'transcriptPlain',
@@ -84,7 +102,7 @@ const PRIMARY_SCENARIO_BY_CATEGORY = Object.freeze({
   запчасти: 'Запчасти',
   аренда: 'Аренда',
   сервис: 'Ремонт',
-  продажа: 'Другое',
+  продажа: 'Заказ / производство',
   спам: 'Другое',
   прочее: 'Другое'
 });
@@ -99,6 +117,12 @@ const PRIMARY_SCENARIO_ALIASES = Object.freeze({
   ремонт: 'Ремонт',
   сервис: 'Ремонт',
   service: 'Ремонт',
+  заказ: 'Заказ / производство',
+  производство: 'Заказ / производство',
+  партия: 'Заказ / производство',
+  запуск: 'Заказ / производство',
+  заказ_производство: 'Заказ / производство',
+  order_production: 'Заказ / производство',
   доставка: 'Доставка',
   логистика: 'Доставка',
   delivery: 'Доставка',
@@ -106,6 +130,49 @@ const PRIMARY_SCENARIO_ALIASES = Object.freeze({
   прочее: 'Другое',
   unknown: 'Другое'
 });
+
+const PRICE_SIGNAL_TOKENS = Object.freeze([
+  'цена',
+  'стоим',
+  'руб',
+  'тыс',
+  'тысяч'
+]);
+
+const TERM_SIGNAL_TOKENS = Object.freeze([
+  'срок',
+  'день',
+  'дня',
+  'дней',
+  'недел',
+  'отгруз',
+  'выезд',
+  'достав',
+  'запуск'
+]);
+
+const ORDER_PRODUCTION_SIGNAL_TOKENS = Object.freeze([
+  'заказ',
+  'парт',
+  'производств',
+  'запуск',
+  'комплектност',
+  'изготов',
+  'тираж',
+  'количеств'
+]);
+
+const DELIVERY_SIGNAL_TOKENS = Object.freeze([
+  'доставк',
+  'логист',
+  'самовывоз',
+  'погруз',
+  'разгруз',
+  'курьер',
+  'маршрут',
+  'водител',
+  'отгруз'
+]);
 
 const EMPTY_OPTIONAL_TEXT_TOKENS = new Set([
   '-',
@@ -287,7 +354,7 @@ function stringFromUnknown(value) {
 }
 
 function normalizeEnumToken(value) {
-  return normalizeWhitespace(stringFromUnknown(value)).toLowerCase().replace(/[\s-]+/g, '_');
+  return normalizeWhitespace(stringFromUnknown(value)).toLowerCase().replace(/[\s\/-]+/g, '_');
 }
 
 function normalizeText(value, maxLength) {
@@ -369,21 +436,15 @@ function inferPrimaryScenarioFromText(contextText) {
     return null;
   }
 
-  if (contextText.includes('запчаст') || contextText.includes('подшип') || contextText.includes('ролик')) {
-    return 'Запчасти';
-  }
+  const hasPriceSignal = PRICE_SIGNAL_TOKENS.some((token) => contextText.includes(token));
+  const hasTermSignal = TERM_SIGNAL_TOKENS.some((token) => contextText.includes(token));
+  const hasOrderProductionSignal = ORDER_PRODUCTION_SIGNAL_TOKENS.some((token) => contextText.includes(token));
+  const hasStrongOrderSignal = contextText.includes('парт') || contextText.includes('производств') || contextText.includes('запуск');
+  const hasDeliverySignal = DELIVERY_SIGNAL_TOKENS.some((token) => contextText.includes(token));
+  const hasPartsSignal = contextText.includes('запчаст') || contextText.includes('подшип') || contextText.includes('ролик');
 
   if (contextText.includes('аренд') || contextText.includes('прокат')) {
     return 'Аренда';
-  }
-
-  if (
-    contextText.includes('доставк') ||
-    contextText.includes('логист') ||
-    contextText.includes('самовывоз') ||
-    contextText.includes('отгруз')
-  ) {
-    return 'Доставка';
   }
 
   if (
@@ -395,6 +456,22 @@ function inferPrimaryScenarioFromText(contextText) {
     return 'Ремонт';
   }
 
+  if (hasStrongOrderSignal || (hasOrderProductionSignal && hasPriceSignal && hasTermSignal)) {
+    return 'Заказ / производство';
+  }
+
+  if (hasPartsSignal && !hasStrongOrderSignal) {
+    return 'Запчасти';
+  }
+
+  if (hasOrderProductionSignal || (hasPriceSignal && hasTermSignal)) {
+    return 'Заказ / производство';
+  }
+
+  if (hasDeliverySignal) {
+    return 'Доставка';
+  }
+
   return null;
 }
 
@@ -403,7 +480,9 @@ function normalizePrimaryScenario(rawPrimaryScenario, category, contextText) {
   if (normalizedToken) {
     const aliasValue = PRIMARY_SCENARIO_ALIASES[normalizedToken];
     if (aliasValue) {
-      return aliasValue;
+      if (aliasValue !== 'Другое') {
+        return aliasValue;
+      }
     }
   }
 
@@ -861,6 +940,10 @@ function normalizeTags(rawTags, category) {
 function buildContextText(payload, transcript) {
   const values = [
     transcript,
+    payload.callEssence,
+    payload.whatDiscussed,
+    payload.scenario,
+    payload.importantNote,
     payload.topic,
     payload.summary,
     payload.result,
@@ -967,6 +1050,10 @@ function validateNormalizedAnalysis(analysis) {
     throw new AnalysisNormalizationError('Invalid analysis.primaryScenario value', 'ANALYSIS_INVALID_PRIMARY_SCENARIO');
   }
 
+  if ('scenario' in analysis && !PRIMARY_SCENARIOS.includes(analysis.scenario)) {
+    throw new AnalysisNormalizationError('Invalid analysis.scenario value', 'ANALYSIS_INVALID_SCENARIO');
+  }
+
   if ('wantedSummary' in analysis) {
     if (typeof analysis.wantedSummary !== 'string' || analysis.wantedSummary.trim() === '') {
       throw new AnalysisNormalizationError('Invalid analysis.wantedSummary value', 'ANALYSIS_INVALID_WANTED_SUMMARY');
@@ -1052,6 +1139,11 @@ function validateNormalizedAnalysis(analysis) {
   }
 
   for (const fieldName of [
+    'callEssence',
+    'whatDiscussed',
+    'importantNote',
+    'analysisPath',
+    'bypassReason',
     'participantsAssumption',
     'detectedClientSpeaker',
     'detectedEmployeeSpeaker',
@@ -1209,8 +1301,22 @@ function normalizeAndValidateAnalysis(payload, options = {}) {
   const contextText = buildContextText(payload, transcript);
 
   const category = normalizeCategory(payload.category, contextText);
+  const callEssence = normalizeOptionalText(
+    pickFirstDefined(payload, ['callEssence', 'shortSummary', 'summary']),
+    TEXT_LIMITS.callEssence
+  );
+  const whatDiscussed = normalizeOptionalText(
+    pickFirstDefined(payload, ['whatDiscussed', 'result', 'issueReason']),
+    TEXT_LIMITS.whatDiscussed
+  );
+  const importantNote = normalizeOptionalText(
+    pickFirstDefined(payload, ['importantNote']),
+    TEXT_LIMITS.importantNote
+  );
 
   const topic = normalizeRequiredTextField('topic', payload.topic, TEXT_LIMITS.topic, [
+    callEssence,
+    whatDiscussed,
     DEFAULT_TOPIC_BY_CATEGORY[category],
     payload.summary,
     payload.result,
@@ -1219,6 +1325,7 @@ function normalizeAndValidateAnalysis(payload, options = {}) {
   ]);
 
   const summary = normalizeRequiredTextField('summary', payload.summary, TEXT_LIMITS.summary, [
+    callEssence,
     transcript,
     payload.result,
     payload.nextStep,
@@ -1226,12 +1333,15 @@ function normalizeAndValidateAnalysis(payload, options = {}) {
   ]);
 
   const result = normalizeRequiredTextField('result', payload.result, TEXT_LIMITS.result, [
+    whatDiscussed,
     payload.summary,
+    payload.outcome,
     DEFAULT_RESULT_BY_CATEGORY[category],
     DEFAULT_RESULT_BY_CATEGORY.прочее
   ]);
 
   const nextStep = normalizeRequiredTextField('nextStep', payload.nextStep, TEXT_LIMITS.nextStep, [
+    payload.outcome,
     payload.result,
     DEFAULT_NEXT_STEP_BY_CATEGORY[category],
     DEFAULT_NEXT_STEP_BY_CATEGORY.прочее
@@ -1240,8 +1350,14 @@ function normalizeAndValidateAnalysis(payload, options = {}) {
   const urgency = normalizeUrgency(payload.urgency, contextText);
   const tags = normalizeTags(payload.tags, category);
   const confidence = normalizeConfidence(payload.confidence);
-  const primaryScenario = normalizePrimaryScenario(payload.primaryScenario, category, contextText);
+  const primaryScenario = normalizePrimaryScenario(
+    pickFirstDefined(payload, ['scenario', 'primaryScenario']),
+    category,
+    contextText
+  );
   const wantedSummary = normalizeWantedSummary(payload.wantedSummary, [
+    callEssence,
+    whatDiscussed,
     payload.summary,
     payload.result,
     summary,
@@ -1309,6 +1425,14 @@ function normalizeAndValidateAnalysis(payload, options = {}) {
     pickFirstDefined(payload, ['nextStepStructured', 'next_step_structured']),
     TEXT_LIMITS.nextStepStructured
   );
+  const analysisPath = normalizeOptionalText(
+    pickFirstDefined(payload, ['analysisPath', 'analysis_path']),
+    TEXT_LIMITS.analysisPath
+  ).toLowerCase();
+  const bypassReason = normalizeOptionalText(
+    pickFirstDefined(payload, ['bypassReason', 'bypass_reason']),
+    TEXT_LIMITS.bypassReason
+  );
   const analysisWarnings = normalizeAnalysisWarnings(
     pickFirstDefined(payload, ['analysisWarnings', 'analysis_warnings'])
   );
@@ -1317,9 +1441,23 @@ function normalizeAndValidateAnalysis(payload, options = {}) {
     analysisWarnings.push('Низкая уверенность в назначении ролей участников.');
   }
 
+  if (importantNote) {
+    const duplicateImportant = analysisWarnings.some((warning) => warning.toLowerCase() === importantNote.toLowerCase());
+    if (!duplicateImportant) {
+      analysisWarnings.push(importantNote);
+    }
+  }
+
+  if (analysisWarnings.length > 8) {
+    analysisWarnings.length = 8;
+  }
+
   const normalized = {
     category,
     topic,
+    scenario: primaryScenario,
+    callEssence: callEssence || summary,
+    whatDiscussed: whatDiscussed || result,
     summary,
     result,
     nextStep,
@@ -1416,6 +1554,18 @@ function normalizeAndValidateAnalysis(payload, options = {}) {
 
   if (nextStepStructured) {
     normalized.nextStepStructured = nextStepStructured;
+  }
+
+  if (importantNote) {
+    normalized.importantNote = importantNote;
+  }
+
+  if (analysisPath) {
+    normalized.analysisPath = analysisPath;
+  }
+
+  if (bypassReason) {
+    normalized.bypassReason = bypassReason;
   }
 
   if (analysisWarnings.length > 0) {

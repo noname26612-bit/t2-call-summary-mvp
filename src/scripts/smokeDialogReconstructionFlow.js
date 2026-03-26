@@ -344,7 +344,9 @@ async function run() {
       timeZone: 'Europe/Moscow'
     });
 
-    assert.ok(message.includes('Итог по фактам:'), `${scenario.title}: summary must contain outcome block`);
+    assert.ok(message.includes('Суть звонка:'), `${scenario.title}: summary must contain essence block`);
+    assert.ok(message.includes('Что обсуждали:'), `${scenario.title}: summary must contain discussed block`);
+    assert.ok(message.includes('Чем закончилось:'), `${scenario.title}: summary must contain outcome block`);
     assert.ok(!message.includes('Абонент:'), `${scenario.title}: obsolete subscriber line must be removed`);
 
     if (scenario.expectEmployeeName) {
@@ -369,22 +371,22 @@ async function run() {
 
     if (scenario.id === 'short_noisy') {
       assert.ok(
-        message.toLowerCase().includes('шум'),
-        'Short noisy transcript must preserve uncertainty context'
+        message.includes('Важно:'),
+        'Short noisy transcript must preserve uncertainty note'
       );
     }
 
     if (scenario.id === 'long_without_labels') {
       assert.ok(
-        message.toLowerCase().includes('суть запроса'),
-        'Long transcript without labels must include extracted request essence'
+        message.includes('Суть звонка:'),
+        'Long transcript without labels must include essence field'
       );
     }
 
     if (scenario.expectExplicitRoles) {
       assert.ok(
-        message.includes('Клиент:'),
-        'High-confidence scenario should use explicit role interpretation'
+        message.includes('Что обсуждали:'),
+        'High-confidence scenario should keep report section for discussed details'
       );
     }
 
@@ -401,16 +403,16 @@ async function run() {
 
     if (scenario.expectNeutralTone) {
       assert.ok(
-        message.includes('По разговору запрос:'),
-        'Low-confidence scenario should use neutral summary style'
+        !message.includes('По разговору запрос:'),
+        'Low-confidence scenario should avoid deprecated wording'
       );
       assert.ok(
-        message.includes('Неопределенность:'),
-        'Low-confidence scenario should include explicit uncertainty'
+        !message.includes('Неопределенность:'),
+        'Low-confidence scenario should avoid deprecated uncertainty label'
       );
       assert.ok(
-        !message.includes('Итог по фактам: Клиент:'),
-        'Low-confidence scenario should avoid explicit role attribution in wanted block'
+        !message.includes('Итог по фактам:'),
+        'Low-confidence scenario should avoid deprecated final block label'
       );
     }
   }

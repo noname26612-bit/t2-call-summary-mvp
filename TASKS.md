@@ -58,6 +58,44 @@ Current status:
     - [x] `/analyze` override ignored log present when overrides are disabled
     - [x] duplicate `callId` second pass returns `duplicate` and does not trigger re-analyze
 
+## Completed workstream (Report-style summary + analyze bypass, `2026-03-25`)
+
+Scope and status:
+
+- [x] Replaced Telegram summary output with compact report-style contract:
+  - [x] `Кто звонил`
+  - [x] `Когда звонил`
+  - [x] `Суть звонка`
+  - [x] `Что обсуждали`
+  - [x] `Чем закончилось`
+  - [x] `Важно` (only when actually needed)
+  - [x] `Сценарий`
+  - [x] `Сотрудник`
+  - [x] `Тип звонка`
+- [x] Removed legacy outward labels from Telegram text:
+  - [x] `Итог по фактам`
+  - [x] `По разговору запрос`
+  - [x] `Неопределенность`
+  - [x] `Основная тема`
+  - [x] `Категория`
+- [x] Added analyze runtime context pass-through (`callType`, caller/callee/destination, duration/answered, participant hints, short-call context)
+- [x] Added compact analysis schema fields (`callEssence`, `whatDiscussed`, `outcome`, optional `importantNote`, `scenario`)
+- [x] Replaced low-signal pre-analyze ignore with deterministic bypass summary path (no hallucinations, no full model analysis for weak calls)
+- [x] Kept existing pre-transcribe skip gates unchanged in Tele2 poller (`outgoing_unanswered`, `<=10s`)
+- [x] Added/updated verification scripts for report-format contract and 5 required scenarios
+- [x] Completed narrow production rollout on VM with backups + health/smoke checks
+
+Verification highlights:
+
+- [x] local report-format smoke suite passed (`smoke:telegram-v2`, `smoke:tele2-poll-runtime-path`, `smoke:dialog-reconstruction`, etc.)
+- [x] scenario verification passed for 5 target cases:
+  - [x] 2 bypass cases (short/weak transcript)
+  - [x] 3 full AI cases (service/parts/emotional noisy)
+- [x] production path `main app -> ai-gateway -> Polza -> Telegram` verified:
+  - [x] `/api/process-call` -> `processed`, `telegram.status=sent`
+  - [x] DB + `ai_usage_audit` rows confirm successful analyze/delivery
+- [x] deterministic bypass verified on production gateway (`/analyze` -> `deterministic-bypass`, `totalTokens=0`)
+
 ## Completed workstream (Self-hosted PostgreSQL cutover, `2026-03-23`)
 
 Scope and status:

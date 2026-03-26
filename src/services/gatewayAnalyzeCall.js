@@ -23,6 +23,50 @@ function normalizeOptionalString(value) {
   return isNonEmptyString(value) ? value.trim() : '';
 }
 
+function normalizeOptionalBoolean(value) {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  if (typeof value === 'number') {
+    if (value === 1) {
+      return true;
+    }
+
+    if (value === 0) {
+      return false;
+    }
+  }
+
+  if (isNonEmptyString(value)) {
+    const normalized = value.trim().toLowerCase();
+    if (['1', 'true', 'yes', 'y', 'да'].includes(normalized)) {
+      return true;
+    }
+
+    if (['0', 'false', 'no', 'n', 'нет'].includes(normalized)) {
+      return false;
+    }
+  }
+
+  return null;
+}
+
+function normalizeOptionalInteger(value) {
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+    return Math.round(value);
+  }
+
+  if (isNonEmptyString(value) && /^[0-9]+$/.test(value.trim())) {
+    const parsed = Number.parseInt(value.trim(), 10);
+    if (Number.isSafeInteger(parsed) && parsed >= 0) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
 function normalizeGatewayPriorityToUrgency(rawPriority) {
   if (!isNonEmptyString(rawPriority)) {
     return '';
@@ -53,15 +97,56 @@ function normalizeEmployeeHint(employee) {
   const employeeName = normalizeOptionalString(employee.employeeName);
   const employeeTitle = normalizeOptionalString(employee.employeeTitle);
 
-  if (!phoneNormalized || !employeeName || !employeeTitle) {
+  if (!phoneNormalized && !employeeName && !employeeTitle) {
+    return null;
+  }
+  const normalized = {};
+  if (phoneNormalized) {
+    normalized.phoneNormalized = phoneNormalized;
+  }
+  if (employeeName) {
+    normalized.employeeName = employeeName;
+  }
+  if (employeeTitle) {
+    normalized.employeeTitle = employeeTitle;
+  }
+  return normalized;
+}
+
+function normalizeAnalyzeBypassHint(rawHint) {
+  if (!rawHint || typeof rawHint !== 'object' || Array.isArray(rawHint)) {
     return null;
   }
 
-  return {
-    phoneNormalized,
-    employeeName,
-    employeeTitle
-  };
+  const reason = normalizeOptionalString(rawHint.reason).slice(0, 200);
+  const signalType = normalizeOptionalString(rawHint.signalType).slice(0, 80);
+  const transcriptLength = normalizeOptionalInteger(rawHint.transcriptLength);
+  const wordsCount = normalizeOptionalInteger(rawHint.wordsCount);
+  const meaningfulWordsCount = normalizeOptionalInteger(rawHint.meaningfulWordsCount);
+  const minTranscriptChars = normalizeOptionalInteger(rawHint.minTranscriptChars);
+
+  const normalized = {};
+
+  if (reason) {
+    normalized.reason = reason;
+  }
+  if (signalType) {
+    normalized.signalType = signalType;
+  }
+  if (transcriptLength !== null) {
+    normalized.transcriptLength = transcriptLength;
+  }
+  if (wordsCount !== null) {
+    normalized.wordsCount = wordsCount;
+  }
+  if (meaningfulWordsCount !== null) {
+    normalized.meaningfulWordsCount = meaningfulWordsCount;
+  }
+  if (minTranscriptChars !== null) {
+    normalized.minTranscriptChars = minTranscriptChars;
+  }
+
+  return Object.keys(normalized).length > 0 ? normalized : null;
 }
 
 function normalizeAiUsage(rawUsage) {
@@ -221,6 +306,25 @@ function normalizeGatewayAnalysisPayload(payload) {
     mapped.result = payload.outcome.trim();
   }
 
+  if (!Object.prototype.hasOwnProperty.call(mapped, 'scenario') && isNonEmptyString(payload.primaryScenario)) {
+    mapped.scenario = payload.primaryScenario.trim();
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(mapped, 'callEssence') && isNonEmptyString(payload.summary)) {
+    mapped.callEssence = payload.summary.trim();
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(mapped, 'whatDiscussed') && isNonEmptyString(payload.result)) {
+    mapped.whatDiscussed = payload.result.trim();
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(mapped, 'importantNote') && Array.isArray(payload.analysisWarnings)) {
+    const firstWarning = payload.analysisWarnings.find((item) => isNonEmptyString(item));
+    if (firstWarning) {
+      mapped.importantNote = firstWarning.trim();
+    }
+  }
+
   if (!Object.prototype.hasOwnProperty.call(mapped, 'urgency') && isNonEmptyString(payload.priority)) {
     mapped.urgency = normalizeGatewayPriorityToUrgency(payload.priority);
   }
@@ -321,12 +425,26 @@ function createGatewayAnalyzeCall(config) {
       callType: normalizeOptionalString(payload?.callType),
       callerNumber: normalizeOptionalString(payload?.callerNumber),
       calleeNumber: normalizeOptionalString(payload?.calleeNumber),
-      destinationNumber: normalizeOptionalString(payload?.destinationNumber)
+      destinationNumber: normalizeOptionalString(payload?.destinationNumber),
+      durationSec: normalizeOptionalInteger(payload?.durationSec),
+      answered: normalizeOptionalBoolean(payload?.answered),
+      noAnswer: normalizeOptionalBoolean(payload?.noAnswer),
+      employeePhone: normalizeOptionalString(payload?.employeePhone),
+      clientPhone: normalizeOptionalString(payload?.clientPhone),
+      transcriptLength: normalizeOptionalInteger(payload?.transcriptLength),
+      shortCall: normalizeOptionalBoolean(payload?.shortCall),
+      callDirectionContext: normalizeOptionalString(payload?.callDirectionContext),
+      whoCalledWhom: normalizeOptionalString(payload?.whoCalledWhom)
     };
 
     const employeeHint = normalizeEmployeeHint(payload?.employee);
     if (employeeHint) {
       requestPayload.employee = employeeHint;
+    }
+
+    const analyzeBypassHint = normalizeAnalyzeBypassHint(payload?.analyzeBypassHint);
+    if (analyzeBypassHint) {
+      requestPayload.analyzeBypassHint = analyzeBypassHint;
     }
 
     const abortController = new AbortController();

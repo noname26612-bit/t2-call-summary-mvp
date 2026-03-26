@@ -48,12 +48,16 @@ function buildAnalysis(transcript) {
 
   return {
     category: 'сервис',
+    scenario: 'Ремонт',
+    callEssence: wantedSummary,
+    whatDiscussed: 'Ключевые детали обсудили кратко.',
+    outcome: 'Итоговое решение в разговоре не зафиксировано.',
     primaryScenario: 'Ремонт',
     topic: 'Тестовое обращение',
     summary: wantedSummary,
     wantedSummary,
-    result: 'Детали зафиксированы.',
-    nextStep: 'Связаться с клиентом.',
+    result: 'Ключевые детали обсудили кратко.',
+    nextStep: 'Итоговое решение в разговоре не зафиксировано.',
     urgency: 'средняя',
     tags: [],
     confidence: 0.9
@@ -219,22 +223,26 @@ async function run() {
 
     assert.ok(incomingMessage.includes('Кто звонил: +79991000001'));
     assert.ok(incomingMessage.includes('Когда звонил:'));
-    assert.ok(incomingMessage.includes('Итог по фактам:'));
-    assert.ok(incomingMessage.includes('Категория:'));
+    assert.ok(incomingMessage.includes('Суть звонка:'));
+    assert.ok(incomingMessage.includes('Что обсуждали:'));
+    assert.ok(incomingMessage.includes('Чем закончилось:'));
+    assert.ok(incomingMessage.includes('Сценарий:'));
     assert.ok(incomingMessage.includes('Тип звонка: Входящий'));
     assert.ok(!incomingMessage.includes('Абонент:'));
     assert.ok(/Тип звонка: Входящий\s*$/.test(incomingMessage));
 
     assert.ok(outgoingMessage.includes('Кто звонил: +79992000002'));
     assert.ok(outgoingMessage.includes('Когда звонил:'));
-    assert.ok(outgoingMessage.includes('Итог по фактам:'));
-    assert.ok(outgoingMessage.includes('Категория:'));
+    assert.ok(outgoingMessage.includes('Суть звонка:'));
+    assert.ok(outgoingMessage.includes('Что обсуждали:'));
+    assert.ok(outgoingMessage.includes('Чем закончилось:'));
+    assert.ok(outgoingMessage.includes('Сценарий:'));
     assert.ok(outgoingMessage.includes('Тип звонка: Исходящий'));
     assert.ok(!outgoingMessage.includes('Абонент:'));
     assert.ok(/Тип звонка: Исходящий\s*$/.test(outgoingMessage));
 
-    assert.ok(!incomingMessage.includes('Следующий шаг:'));
-    assert.ok(!outgoingMessage.includes('Следующий шаг:'));
+    assert.ok(!incomingMessage.includes('Итог по фактам:'));
+    assert.ok(!outgoingMessage.includes('Итог по фактам:'));
 
     process.stdout.write('Smoke tele2 poll runtime path: OK\n');
     process.stdout.write(`Incoming message:\n${incomingMessage}\n\n`);
